@@ -170,6 +170,7 @@ async def test_score_floor_from_disputes(engine: ScoreComputation) -> None:
     engine._get_cached_score = AsyncMock(return_value=0.5)
     engine._get_auth_trust_level = AsyncMock(return_value="delegated")
     engine._count_lost_disputes = AsyncMock(return_value=1000)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
     score = await engine.compute(agent_id, "overall", AsyncMock())
     assert score.score >= 0.0
@@ -190,6 +191,7 @@ async def test_score_always_in_unit_interval(engine: ScoreComputation) -> None:
         engine._get_cached_score = AsyncMock(return_value=0.5)
         engine._get_auth_trust_level = AsyncMock(return_value="delegated")
         engine._count_lost_disputes = AsyncMock(return_value=0)
+        engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
         score = await engine.compute(agent_id, "overall", AsyncMock())
         assert 0.0 <= score.score <= 1.0, f"Score out of range for outcome={outcome}"
@@ -205,6 +207,7 @@ async def test_confidence_increases_with_interactions(engine: ScoreComputation) 
     engine._get_cached_score = AsyncMock(return_value=0.5)
     engine._get_auth_trust_level = AsyncMock(return_value="delegated")
     engine._count_lost_disputes = AsyncMock(return_value=0)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
     confidences = []
     for n in [0, 5, 10, 20, 50]:
@@ -236,6 +239,7 @@ async def test_partial_outcome_intermediate_score(engine: ScoreComputation) -> N
     engine._get_cached_score = AsyncMock(return_value=0.5)
     engine._get_auth_trust_level = AsyncMock(return_value="delegated")
     engine._count_lost_disputes = AsyncMock(return_value=0)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
     n = 20
     for outcome, expected_range in [
@@ -279,9 +283,76 @@ def test_score_bounded_property(n_success: int, n_failure: int) -> None:
         engine._get_cached_score = AsyncMock(return_value=0.5)
         engine._get_auth_trust_level = AsyncMock(return_value="delegated")
         engine._count_lost_disputes = AsyncMock(return_value=0)
+        engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
         score = await engine.compute(agent_id, "overall", AsyncMock())
         assert 0.0 <= score.score <= 1.0
         assert 0.0 <= score.confidence <= 1.0
 
     asyncio.run(run())
+
+
+@pytest.mark.asyncio
+async def test_dismissed_dispute_penalizes_filer(engine: ScoreComputation) -> None:
+    """Filing a frivolous dispute (dismissed) slightly penalizes the filer."""
+    agent_id = uuid.uuid4()
+    counterparty_id = uuid.uuid4()
+
+    interactions = [
+        make_interaction(agent_id, counterparty_id, outcome="success")
+        for _ in range(10)
+    ]
+
+    engine._fetch_interactions = AsyncMock(return_value=interactions)
+    engine._get_cached_score = AsyncMock(return_value=0.5)
+    engine._get_auth_trust_level = AsyncMock(return_value="delegated")
+    engine._count_lost_disputes = AsyncMock(return_value=0)
+
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
+    score_clean = await engine.compute(agent_id, "overall", AsyncMock())
+
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=3)
+    score_penalized = await engine.compute(agent_id, "overall", AsyncMock())
+
+    assert score_penalized.score < score_clean.score
+    assert score_penalized.factor_breakdown.get("dismissed_disputes_filed") == 3
+
+
+@pytest.mark.asyncio
+async def test_dismissed_penalty_floored_at_90_percent(engine: ScoreComputation) -> None:
+    """Dismissed dispute penalty is floored — score can't drop more than 10% from frivolous disputes."""
+    agent_id = uuid.uuid4()
+    counterparty_id = uuid.uuid4()
+
+    interactions = [
+        make_interaction(agent_id, counterparty_id, outcome="success")
+        for _ in range(20)
+    ]
+
+    engine._fetch_interactions = AsyncMock(return_value=interactions)
+    engine._get_cached_score = AsyncMock(return_value=0.5)
+    engine._get_auth_trust_level = AsyncMock(return_value="delegated")
+    engine._count_lost_disputes = AsyncMock(return_value=0)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=1000)
+
+    score = await engine.compute(agent_id, "overall", AsyncMock())
+    assert score.factor_breakdown["dismissed_penalty"] == 0.90
+
+
+@pytest.mark.asyncio
+async def test_upheld_dispute_factor_breakdown(engine: ScoreComputation) -> None:
+    """Upheld disputes appear in factor_breakdown."""
+    agent_id = uuid.uuid4()
+    counterparty_id = uuid.uuid4()
+
+    interactions = [make_interaction(agent_id, counterparty_id, outcome="success") for _ in range(10)]
+
+    engine._fetch_interactions = AsyncMock(return_value=interactions)
+    engine._get_cached_score = AsyncMock(return_value=0.5)
+    engine._get_auth_trust_level = AsyncMock(return_value="delegated")
+    engine._count_lost_disputes = AsyncMock(return_value=2)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
+
+    score = await engine.compute(agent_id, "overall", AsyncMock())
+    assert score.factor_breakdown["lost_disputes"] == 2
+    assert score.factor_breakdown["dispute_penalty"] == round(1.0 - 2 * 0.03, 4)

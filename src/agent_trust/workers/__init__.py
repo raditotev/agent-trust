@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from agent_trust.workers.alert_dispatcher import dispatch_alerts
-from agent_trust.workers.attestation_expiry import expire_attestations
-from agent_trust.workers.decay_refresh import refresh_all_scores
+from agent_trust.workers.attestation_expiry import expire_attestations as expire_attestations
+from agent_trust.workers.decay_refresh import refresh_all_scores as refresh_all_scores
 from agent_trust.workers.score_recomputer import recompute_score
 
 

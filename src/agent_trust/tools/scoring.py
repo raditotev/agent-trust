@@ -129,7 +129,8 @@ async def check_trust(
     - Authenticated (trust.read scope): adds factor_breakdown summary
     """
     if not (score_type in VALID_SCORE_TYPES or score_type.startswith("domain:")):
-        return {"error": f"Invalid score_type. Use one of {sorted(VALID_SCORE_TYPES)} or 'domain:name'"}
+        valid = sorted(VALID_SCORE_TYPES)
+        return {"error": f"Invalid score_type. Use one of {valid} or 'domain:name'"}
 
     try:
         agent_uuid = uuid.UUID(agent_id)
@@ -137,9 +138,7 @@ async def check_trust(
         return {"error": f"Invalid agent_id UUID: {agent_id}"}
 
     async with get_session() as session:
-        agent_result = await session.execute(
-            select(Agent).where(Agent.agent_id == agent_uuid)
-        )
+        agent_result = await session.execute(select(Agent).where(Agent.agent_id == agent_uuid))
         agent = agent_result.scalar_one_or_none()
         if not agent:
             return {"error": f"Agent not found: {agent_id}"}
@@ -204,9 +203,7 @@ async def get_score_breakdown(
         return {"error": f"Invalid agent_id UUID: {agent_id}"}
 
     async with get_session() as session:
-        agent_result = await session.execute(
-            select(Agent).where(Agent.agent_id == agent_uuid)
-        )
+        agent_result = await session.execute(select(Agent).where(Agent.agent_id == agent_uuid))
         agent = agent_result.scalar_one_or_none()
         if not agent:
             return {"error": f"Agent not found: {agent_id}"}
@@ -260,9 +257,7 @@ async def compare_agents(
             continue
 
         async with get_session() as session:
-            agent_result = await session.execute(
-                select(Agent).where(Agent.agent_id == agent_uuid)
-            )
+            agent_result = await session.execute(select(Agent).where(Agent.agent_id == agent_uuid))
             agent = agent_result.scalar_one_or_none()
             if not agent:
                 results.append({"agent_id": agent_id, "error": "Agent not found"})
@@ -270,18 +265,20 @@ async def compare_agents(
 
         score_data = await _get_or_compute_score(agent_uuid, score_type)
         if score_data:
-            results.append({
-                "agent_id": agent_id,
-                "score": score_data["score"],
-                "confidence": score_data["confidence"],
-                "interaction_count": score_data["interaction_count"],
-            })
+            results.append(
+                {
+                    "agent_id": agent_id,
+                    "score": score_data["score"],
+                    "confidence": score_data["confidence"],
+                    "interaction_count": score_data["interaction_count"],
+                }
+            )
         else:
             results.append({"agent_id": agent_id, "error": "Could not compute score"})
 
     # Sort by score descending (errors at bottom)
     results.sort(
-        key=lambda x: (x.get("score", -1) if "error" not in x else -1),
+        key=lambda x: x.get("score", -1) if "error" not in x else -1,
         reverse=True,
     )
 

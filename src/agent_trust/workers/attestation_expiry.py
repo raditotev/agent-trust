@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import structlog
+from sqlalchemy import select
+
+from agent_trust.db.session import get_session
+from agent_trust.models import Attestation
 
 log = structlog.get_logger()
 
@@ -11,13 +17,6 @@ async def expire_attestations(ctx: dict) -> dict:
     Scans for attestations past their valid_until time and marks them revoked.
     Full implementation in Task 16.
     """
-    from datetime import UTC, datetime
-
-    from sqlalchemy import select
-
-    from agent_trust.db.session import get_session
-    from agent_trust.models import Attestation
-
     now = datetime.now(UTC)
     revoked_count = 0
 

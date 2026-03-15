@@ -59,7 +59,7 @@ async def test_expire_attestations_marks_expired():
     expired_attestation.valid_until = datetime.now(UTC) - timedelta(hours=1)
 
     mock_session = AsyncMock()
-    result_mock = AsyncMock()
+    result_mock = MagicMock()
     result_mock.scalars.return_value.all.return_value = [expired_attestation]
     mock_session.execute = AsyncMock(return_value=result_mock)
 

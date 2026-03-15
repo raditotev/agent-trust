@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 import structlog
+from sqlalchemy import select
+
+from agent_trust.config import settings
+from agent_trust.db.redis import get_redis
+from agent_trust.db.session import get_session
+from agent_trust.engine.score_engine import SCORE_TYPES, ScoreComputation, upsert_trust_score
+from agent_trust.models import Agent
 
 log = structlog.get_logger()
 
@@ -11,13 +18,6 @@ async def refresh_all_scores(ctx: dict) -> dict:
     Runs periodically (e.g., nightly) to apply time decay to all agents.
     Agents with no recent interactions will see their scores drift toward 0.5.
     """
-    from sqlalchemy import select
-
-    from agent_trust.config import settings
-    from agent_trust.db.session import get_session
-    from agent_trust.engine.score_engine import SCORE_TYPES, ScoreComputation, upsert_trust_score
-    from agent_trust.models import Agent
-
     log.info("decay_refresh_start")
 
     engine = ScoreComputation(
@@ -48,8 +48,6 @@ async def refresh_all_scores(ctx: dict) -> dict:
                     errors += 1
 
     try:
-        from agent_trust.db.redis import get_redis
-
         redis = await get_redis()
         cursor = 0
         deleted = 0

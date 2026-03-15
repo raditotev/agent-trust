@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/workers/decay_refresh.py
+# hypothesis_version: 6.151.9
+
+[100, 'active', 'cache_flush_failed', 'decay_refresh_done', 'decay_refresh_failed', 'decay_refresh_start', 'errors', 'refreshed', 'score:*', 'score_cache_flushed']

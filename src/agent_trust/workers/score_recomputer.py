@@ -47,7 +47,12 @@ async def recompute_score(ctx: dict, agent_id: str) -> dict:
                     score=float(trust_score.score),
                 )
             except Exception as e:
-                log.error("score_compute_failed", agent_id=agent_id, score_type=score_type, error=str(e))
+                log.error(
+                    "score_compute_failed",
+                    agent_id=agent_id,
+                    score_type=score_type,
+                    error=str(e),
+                )
 
     try:
         redis = await get_redis()

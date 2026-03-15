@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/workers/score_recomputer.py
+# hypothesis_version: 6.151.9
+
+['agent_id', 'error', 'invalid_agent_id', 'recompute_score_done', 'score_compute_failed', 'score_updated', 'updated_scores']

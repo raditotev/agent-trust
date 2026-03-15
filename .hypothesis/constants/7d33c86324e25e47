@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/tools/scoring.py
+# hypothesis_version: 6.151.9
+
+['Agent not found', 'Invalid UUID', 'agent_id', 'agents', 'auth_optional_failed', 'authenticated_as', 'computed_at', 'computed_by', 'confidence', 'count', 'domain:', 'error', 'factor_breakdown', 'honesty', 'interaction_count', 'overall', 'rank', 'reliability', 'responsiveness', 'score', 'score_type', 'scores', 'trust.read']
