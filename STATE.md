@@ -155,3 +155,9 @@
 - Integrated into check_trust and report_interaction
 - Returns retry_after_seconds when limit exceeded
 - Fail-open: Redis unavailability allows requests through with a warning log
+
+### Task 21: Structured Logging ✅
+- logging_config.py: configure_logging() with JSON (prod) and console (dev) renderers
+- bind_request_context / clear_request_context: per-request correlation IDs via structlog.contextvars
+- json_logs + log_level config settings; server.py updated at startup
+- __version__ = "0.1.0" in package __init__

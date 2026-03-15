@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     mcp_transport: Literal["stdio", "streamable-http"] = "stdio"
     mcp_port: int = 8000
 
+    # Logging
+    log_level: str = "INFO"
+    json_logs: bool = False  # set True in production
+
     # Rate limiting (requests per minute per agent)
     rate_limit_base: int = 60
     rate_limit_root_multiplier: float = 5.0

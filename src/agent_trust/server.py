@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import logging
-import sys
 
 import sqlalchemy
 import structlog
 from mcp.server.fastmcp import FastMCP
 
 from agent_trust.config import settings
+from agent_trust.logging_config import configure_logging
 from agent_trust.prompts.diagnose import dispute_assessment, explain_score_change
 from agent_trust.prompts.evaluate import evaluate_counterparty
 from agent_trust.resources.attestations_resource import get_agent_attestations
@@ -30,19 +29,7 @@ from agent_trust.tools.interactions import get_interaction_history, report_inter
 from agent_trust.tools.scoring import check_trust, compare_agents, get_score_breakdown
 from agent_trust.tools.sybil import sybil_check
 
-structlog.configure(
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer()
-        if sys.stderr.isatty()
-        else structlog.processors.JSONRenderer(),
-    ],
-    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-    context_class=dict,
-    logger_factory=structlog.PrintLoggerFactory(),
-)
+configure_logging(json_logs=settings.json_logs, log_level=settings.log_level)
 
 log = structlog.get_logger()
 
