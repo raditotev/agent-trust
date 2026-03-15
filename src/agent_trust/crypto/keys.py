@@ -51,8 +51,7 @@ def load_private_key(path: str | Path) -> Ed25519PrivateKey:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(
-            f"Signing key not found at {path}. "
-            "Run: uv run python scripts/generate_keypair.py"
+            f"Signing key not found at {path}. Run: uv run python scripts/generate_keypair.py"
         )
     pem = path.read_bytes()
     key = serialization.load_pem_private_key(pem, password=None)

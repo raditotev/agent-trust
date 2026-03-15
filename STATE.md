@@ -66,3 +66,13 @@
 - Dispute penalty: floor at 0.50, 0.03 per lost dispute
 - score_type filtering: interactions routed to relevant score categories
 - Property-based tests with hypothesis (200 examples)
+
+## Phase 3 Progress
+
+### Task 12: Attestation Signing Crypto Layer ✅
+- Ed25519 keypair management: generate, save (chmod 600), load with validation
+- JWT signing/verification using EdDSA algorithm (PyJWT + cryptography)
+- JWT claims include: sub, jti, iat/nbf/exp, iss=agent-trust, scores snapshot, agentauth_linked
+- scripts/generate_keypair.py: generates service keypair to keys/ directory
+- keys/ directory in .gitignore for security
+- Tests: sign/verify roundtrip, expired/tampered/wrong-key rejection
