@@ -45,6 +45,8 @@ class ScoreComputation:
     half_life_days: float = 90.0
     dispute_penalty_per: float = 0.03
     dispute_penalty_floor: float = 0.50
+    dismissed_penalty_per: float = 0.01
+    dismissed_penalty_floor: float = 0.90
     mutual_confirmation_bonus: float = 1.5
     trust_level_weights: dict[str, float] = field(default_factory=lambda: dict(TRUST_LEVEL_WEIGHTS))
 
@@ -92,13 +94,22 @@ class ScoreComputation:
 
         raw_score = alpha / (alpha + beta)
         score = raw_score * penalty
+
+        dismissed_filed = await self._count_dismissed_disputes_filed_by(agent_id, session)
+        dismissed_penalty = max(
+            1.0 - dismissed_filed * self.dismissed_penalty_per,
+            self.dismissed_penalty_floor,
+        )
+        score = score * dismissed_penalty
+        score = round(min(max(score, 0.0), 1.0), 4)
+
         n = len(interactions)
         confidence = 1.0 - (1.0 / (1.0 + n * 0.1))
 
         return TrustScore(
             agent_id=agent_id,
             score_type=score_type,
-            score=round(min(max(score, 0.0), 1.0), 4),
+            score=score,
             confidence=round(min(max(confidence, 0.0), 1.0), 4),
             interaction_count=n,
             factor_breakdown={
@@ -106,6 +117,8 @@ class ScoreComputation:
                 "dispute_penalty": round(penalty, 4),
                 "interactions_weighted": n,
                 "lost_disputes": lost_disputes,
+                "dismissed_disputes_filed": dismissed_filed,
+                "dismissed_penalty": round(dismissed_penalty, 4),
                 "alpha": round(alpha, 4),
                 "beta": round(beta, 4),
             },
@@ -198,6 +211,23 @@ class ScoreComputation:
                 Dispute.filed_against == agent_id,
                 Dispute.status == "resolved",
                 Dispute.resolution == "upheld",
+            )
+        )
+        return result.scalar() or 0
+
+    async def _count_dismissed_disputes_filed_by(
+        self,
+        agent_id: uuid.UUID,
+        session: AsyncSession,
+    ) -> int:
+        """Count frivolous disputes dismissed against this agent as filer."""
+        result = await session.execute(
+            select(func.count())
+            .select_from(Dispute)
+            .where(
+                Dispute.filed_by == agent_id,
+                Dispute.status == "resolved",
+                Dispute.resolution == "dismissed",
             )
         )
         return result.scalar() or 0

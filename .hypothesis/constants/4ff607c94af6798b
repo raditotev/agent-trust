@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/tools/attestations.py
+# hypothesis_version: 6.151.9
+
+[720, 'Invalid signature', 'agent_type', 'agentauth_linked', 'attestation_id', 'attestation_issued', 'confidence', 'error', 'exp', 'iat', 'interaction_count', 'issued_at', 'jti', 'jwt_token', 'score', 'score_snapshot', 'scores', 'seconds_remaining', 'sub', 'subject_agent_id', 'trust.attest.issue', 'unknown', 'valid', 'valid_from', 'valid_until']

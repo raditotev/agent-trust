@@ -52,6 +52,7 @@ async def test_all_success_interactions_high_score(engine: ScoreComputation) -> 
     engine._get_cached_score = AsyncMock(return_value=0.5)
     engine._get_auth_trust_level = AsyncMock(return_value="delegated")
     engine._count_lost_disputes = AsyncMock(return_value=0)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
     score = await engine.compute(agent_id, "overall", AsyncMock())
     assert score.score > 0.7
@@ -72,6 +73,7 @@ async def test_all_failure_interactions_low_score(engine: ScoreComputation) -> N
     engine._get_cached_score = AsyncMock(return_value=0.5)
     engine._get_auth_trust_level = AsyncMock(return_value="delegated")
     engine._count_lost_disputes = AsyncMock(return_value=0)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
     score = await engine.compute(agent_id, "overall", AsyncMock())
     assert score.score < 0.3
@@ -90,6 +92,7 @@ async def test_root_reporter_shifts_score_more_than_ephemeral(engine: ScoreCompu
     engine._fetch_interactions = AsyncMock(return_value=interactions)
     engine._get_cached_score = AsyncMock(return_value=0.5)
     engine._count_lost_disputes = AsyncMock(return_value=0)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
     engine._get_auth_trust_level = AsyncMock(return_value="root")
     score_root = await engine.compute(agent_id, "overall", AsyncMock())
@@ -118,6 +121,7 @@ async def test_mutual_confirmation_bonus(engine: ScoreComputation) -> None:
     engine._get_cached_score = AsyncMock(return_value=0.5)
     engine._get_auth_trust_level = AsyncMock(return_value="delegated")
     engine._count_lost_disputes = AsyncMock(return_value=0)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
     engine._fetch_interactions = AsyncMock(return_value=one_sided)
     score_one_sided = await engine.compute(agent_id, "overall", AsyncMock())
@@ -143,6 +147,7 @@ async def test_lost_disputes_apply_penalty(engine: ScoreComputation) -> None:
     engine._get_auth_trust_level = AsyncMock(return_value="delegated")
 
     engine._count_lost_disputes = AsyncMock(return_value=0)
+    engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
     score_clean = await engine.compute(agent_id, "overall", AsyncMock())
 
     engine._count_lost_disputes = AsyncMock(return_value=5)

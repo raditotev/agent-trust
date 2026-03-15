@@ -77,6 +77,13 @@
 - keys/ directory in .gitignore for security
 - Tests: sign/verify roundtrip, expired/tampered/wrong-key rejection
 
+### Task 13: Attestation Tools ✅
+- issue_attestation: requires trust.attest.issue scope; snapshots all score types; signs EdDSA JWT; persists to DB
+- verify_attestation: no auth required (portable by design); checks DB revocation; verifies EdDSA signature
+- TTL configurable (1hr to 720hr), default from ATTESTATION_TTL_HOURS env var
+- JWT claims: sub, jti, iat/nbf/exp, iss=agent-trust, scores snapshot, agentauth_linked, agent_type
+- Tests: scope enforcement, key-not-found error, expired/tampered/revoked/malformed rejection
+
 ### Task 14: Dispute Tools with AgentAuth RBAC ✅
 - file_dispute: requires trust.dispute.file scope; filer must be party to the interaction
 - resolve_dispute: requires trust.dispute.resolve scope AND AgentAuth check_permission

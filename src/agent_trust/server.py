@@ -18,6 +18,8 @@ from agent_trust.tools.agents import (
 )
 from agent_trust.tools.disputes import file_dispute, resolve_dispute
 from agent_trust.tools.interactions import get_interaction_history, report_interaction
+from agent_trust.tools.attestations import issue_attestation, verify_attestation
+from agent_trust.tools.scoring import check_trust, compare_agents, get_score_breakdown
 
 structlog.configure(
     processors=[
@@ -60,6 +62,15 @@ mcp.tool()(get_interaction_history)
 # Register dispute tools
 mcp.tool()(file_dispute)
 mcp.tool()(resolve_dispute)
+
+# Register scoring tools
+mcp.tool()(check_trust)
+mcp.tool()(get_score_breakdown)
+mcp.tool()(compare_agents)
+
+# Register attestation tools
+mcp.tool()(issue_attestation)
+mcp.tool()(verify_attestation)
 
 
 async def lifespan_startup() -> None:

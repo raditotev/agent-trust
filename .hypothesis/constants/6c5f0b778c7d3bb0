@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/engine/score_engine.py
+# hypothesis_version: 6.151.9
+
+[0.0, 0.01, 0.03, 0.1, 0.5, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5, 2.0, 90.0, 86400, 'agentauth', 'alpha', 'bayesian_raw', 'beta', 'collaboration', 'delegated', 'delegation', 'dismissed', 'dismissed_penalty', 'dispute_penalty', 'ephemeral', 'failure', 'honesty', 'lost_disputes', 'overall', 'partial', 'query', 'reliability', 'resolved', 'responsiveness', 'root', 'standalone', 'success', 'timeout', 'transaction', 'trust_level', 'upheld']
