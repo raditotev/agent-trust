@@ -92,3 +92,17 @@
 - Resolution: upheld (penalizes target), dismissed (penalizes filer), split
 - Triggers immediate score recomputation via arq after resolution
 - Tests: scope enforcement, AgentAuth RBAC gating, party validation
+
+### Task 9: Scoring Tools ✅
+- check_trust: unauthenticated returns score/confidence/interaction_count; authenticated adds factor_breakdown
+- get_score_breakdown: requires trust.read scope; returns all 4 score dimensions with full factor attribution
+- compare_agents: ranked comparison of up to 10 agents, sorted by score descending
+- Redis cache: 60s TTL per (agent_id, score_type); miss falls back to DB then live ScoreComputation
+
+### Task 10: Background Workers ✅
+- score_recomputer: recompute_score arq task recomputes all score types; invalidates Redis cache
+- decay_refresh: refresh_all_scores periodic task applies time decay to all active agents
+- attestation_expiry: expire_attestations marks past-due attestations revoked (also used by Task 16)
+- alert_dispatcher: stub ready for Task 18
+- WorkerSettings: arq configuration for worker process
+- scripts/run_worker.py: worker process entry point
