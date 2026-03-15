@@ -112,3 +112,14 @@
 - Dismissed disputes: 0.01 penalty per frivolous filing, floored at 0.90 (penalizes filer)
 - Both penalties tracked in factor_breakdown for full transparency
 - resolve_dispute already triggers immediate score recomputation via arq
+
+### Task 11: Score Resources ✅
+- trust://agents/{id}/score — scores for all types with confidence
+- trust://agents/{id}/history — 90-day interaction summary
+- trust://leaderboard/{score_type} — top 50 with min confidence filter
+
+### Task 16: Remaining Resources + Attestation Expiry Worker ✅
+- trust://agents/{id}/attestations — active attestations only
+- trust://disputes/{id} — full dispute record
+- trust://health — DB/Redis/AgentAuth MCP reachability
+- attestation_expiry worker: marks expired attestations as revoked
