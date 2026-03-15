@@ -155,7 +155,9 @@ class SybilDetector:
         window_end = registered_at + timedelta(hours=1)
 
         burst_count_result = await self.session.execute(
-            select(func.count()).select_from(Agent).where(
+            select(func.count())
+            .select_from(Agent)
+            .where(
                 Agent.registered_at >= window_start,
                 Agent.registered_at <= window_end,
             )

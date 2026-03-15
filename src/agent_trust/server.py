@@ -9,14 +9,14 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from agent_trust.config import settings
+from agent_trust.prompts.diagnose import dispute_assessment, explain_score_change
+from agent_trust.prompts.evaluate import evaluate_counterparty
 from agent_trust.resources.attestations_resource import get_agent_attestations
 from agent_trust.resources.disputes_resource import get_dispute
 from agent_trust.resources.health import get_health
 from agent_trust.resources.history import get_agent_history
 from agent_trust.resources.leaderboard import get_leaderboard
 from agent_trust.resources.scores import get_agent_score
-from agent_trust.prompts.diagnose import dispute_assessment, explain_score_change
-from agent_trust.prompts.evaluate import evaluate_counterparty
 from agent_trust.tools.agents import (
     get_agent_profile,
     link_agentauth,

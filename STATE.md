@@ -132,6 +132,12 @@
 - dispute_assessment: arbitrator guide for structured evidence-based resolution
 - All 3 prompts registered on FastMCP server and visible in MCP Inspector
 
+### Task 19: Sybil Detection ✅
+- SybilDetector: three strategies — ring_reporting (mutual success loops, 30d window), burst_registration (5+ agents in 2h window), delegation_chain (depth > 3)
+- Risk score: max severity across signals; is_suspicious >= 0.4, is_high_risk >= 0.7
+- sybil_check tool: public MCP tool (no auth required)
+- delegated_by field added to Agent model + migration a13d97533c44
+
 ### Task 22: AgentAuth Scripts ✅
 - scripts/register_scopes.py: connects to AgentAuth MCP, calls quickstart + scope registration tools
   gracefully degrades when AGENTAUTH_ACCESS_TOKEN not set (prints scope definitions instead)
