@@ -7,11 +7,19 @@ class Base(DeclarativeBase):
     pass
 
 
-from agent_trust.models.agent import Agent
-from agent_trust.models.interaction import Interaction
-from agent_trust.models.trust_score import TrustScore
-from agent_trust.models.dispute import Dispute
-from agent_trust.models.attestation import Attestation
-from agent_trust.models.alert_subscription import AlertSubscription
+from agent_trust.models.agent import Agent  # noqa: E402
+from agent_trust.models.alert_subscription import AlertSubscription  # noqa: E402
+from agent_trust.models.attestation import Attestation  # noqa: E402
+from agent_trust.models.dispute import Dispute  # noqa: E402
+from agent_trust.models.interaction import Interaction  # noqa: E402
+from agent_trust.models.trust_score import TrustScore  # noqa: E402
 
-__all__ = ["Base", "Agent", "Interaction", "TrustScore", "Dispute", "Attestation", "AlertSubscription"]
+__all__ = [
+    "Base",
+    "Agent",
+    "Interaction",
+    "TrustScore",
+    "Dispute",
+    "Attestation",
+    "AlertSubscription",
+]

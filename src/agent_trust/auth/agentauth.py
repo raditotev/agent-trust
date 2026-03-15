@@ -29,7 +29,11 @@ class AgentAuthProvider:
         if settings.agentauth_access_token:
             headers["Authorization"] = f"Bearer {settings.agentauth_access_token}"
 
-        async with streamablehttp_client(settings.agentauth_mcp_url, headers=headers) as (read, write, _):
+        async with streamablehttp_client(settings.agentauth_mcp_url, headers=headers) as (
+            read,
+            write,
+            _,
+        ):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool(tool_name, arguments)
@@ -93,12 +97,15 @@ class AgentAuthProvider:
     ) -> bool:
         """Check permission via AgentAuth check_permission MCP tool."""
         try:
-            result = await self._call_agentauth_tool("check_permission", {
-                "agent_id": identity.agent_id,
-                "action": action,
-                "resource": resource,
-                "access_token": settings.agentauth_access_token,
-            })
+            result = await self._call_agentauth_tool(
+                "check_permission",
+                {
+                    "agent_id": identity.agent_id,
+                    "action": action,
+                    "resource": resource,
+                    "access_token": settings.agentauth_access_token,
+                },
+            )
             return result.get("allowed", False)
         except Exception as e:
             log.warning("agentauth_check_permission_failed", error=str(e))

@@ -33,6 +33,7 @@ class AuthProvider(Protocol):
 def require_scope(identity: AgentIdentity, scope: str) -> None:
     """Raise AuthorizationError if the identity lacks the required scope."""
     from agent_trust.auth.identity import AuthorizationError
+
     if not identity.has_scope(scope):
         raise AuthorizationError(
             f"Required scope '{scope}' not present. Agent has: {identity.scopes}"

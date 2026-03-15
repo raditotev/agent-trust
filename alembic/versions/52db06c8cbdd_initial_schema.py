@@ -82,8 +82,11 @@ def upgrade() -> None:
     )
     op.create_index('idx_interactions_counterparty', 'interactions', ['counterparty_id', 'reported_at'], unique=False)
     op.create_index('idx_interactions_initiator', 'interactions', ['initiator_id', 'reported_at'], unique=False)
-    # Create TimescaleDB hypertable for time-series interaction data
+    # TimescaleDB requires the partitioning column in the primary key.
+    # Drop the single-column PK, then convert to hypertable, then add composite PK.
+    op.execute("ALTER TABLE interactions DROP CONSTRAINT interactions_pkey")
     op.execute("SELECT create_hypertable('interactions', 'reported_at', if_not_exists => TRUE)")
+    op.execute("ALTER TABLE interactions ADD CONSTRAINT interactions_pkey PRIMARY KEY (interaction_id, reported_at)")
     op.create_table('trust_scores',
     sa.Column('agent_id', sa.UUID(), nullable=False),
     sa.Column('score_type', sa.String(length=50), nullable=False),
@@ -110,7 +113,8 @@ def upgrade() -> None:
     sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['filed_against'], ['agents.agent_id'], ),
     sa.ForeignKeyConstraint(['filed_by'], ['agents.agent_id'], ),
-    sa.ForeignKeyConstraint(['interaction_id'], ['interactions.interaction_id'], ),
+    # Note: no FK to interactions — TimescaleDB hypertables don't support inbound FKs.
+    # Application logic enforces the interaction_id reference.
     sa.ForeignKeyConstraint(['resolved_by'], ['agents.agent_id'], ),
     sa.PrimaryKeyConstraint('dispute_id')
     )

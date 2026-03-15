@@ -9,6 +9,15 @@
 - Alembic configured for async migrations
 - uv sync verified
 
+### Task 2: Database Models + Migrations ✅
+- SQLAlchemy async ORM models for all 6 tables (agents, interactions, trust_scores, disputes, attestations, alert_subscriptions)
+- All models use UUIDs, TIMESTAMPTZ, JSONB; proper indexes including GIN for capabilities array
+- Alembic migration with TimescaleDB hypertable for interactions table (composite PK including reported_at)
+- Dispute.interaction_id is a soft reference (no DB FK) per TimescaleDB hypertable constraints
+- Async session factory (db/session.py) and Redis connection pool (db/redis.py)
+- Pydantic v2 schemas for all entities (agent, score, interaction, dispute)
+- `alembic upgrade head` runs successfully against TimescaleDB
+
 ### Task 3: AgentAuth Integration Layer ✅
 - AuthProvider protocol for pluggable auth backends
 - AgentAuthProvider: MCP client calling AgentAuth's introspect_token and check_permission tools

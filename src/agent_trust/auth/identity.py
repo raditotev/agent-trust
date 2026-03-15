@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 @dataclass
 class AgentIdentity:
     """Resolved identity for an authenticated agent."""
+
     agent_id: str
     source: str  # "agentauth" | "standalone"
     scopes: list[str] = field(default_factory=list)

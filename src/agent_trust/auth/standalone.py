@@ -38,9 +38,7 @@ class StandaloneProvider:
 
         agent = await self._lookup_by_public_key(public_key_bytes)
         if not agent:
-            raise AuthenticationError(
-                "Unknown public key — register first via register_agent"
-            )
+            raise AuthenticationError("Unknown public key — register first via register_agent")
 
         return AgentIdentity(
             agent_id=str(agent.agent_id),
@@ -63,8 +61,8 @@ class StandaloneProvider:
         if self._db is None:
             return None
         from sqlalchemy import select
+
         from agent_trust.models import Agent
-        result = await self._db.execute(
-            select(Agent).where(Agent.public_key == public_key_bytes)
-        )
+
+        result = await self._db.execute(select(Agent).where(Agent.public_key == public_key_bytes))
         return result.scalar_one_or_none()

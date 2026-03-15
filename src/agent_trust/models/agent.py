@@ -14,7 +14,9 @@ from agent_trust.models import Base
 class Agent(Base):
     __tablename__ = "agents"
 
-    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    agent_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     capabilities: Mapped[list[str]] = mapped_column(ARRAY(String), server_default="{}")
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}")
