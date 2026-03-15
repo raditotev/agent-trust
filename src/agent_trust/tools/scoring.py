@@ -132,6 +132,35 @@ async def check_trust(
         valid = sorted(VALID_SCORE_TYPES)
         return {"error": f"Invalid score_type. Use one of {valid} or 'domain:name'"}
 
+    # Resolve optional identity for rate limit trust level
+    _rl_agent_id: str | None = None
+    _rl_trust_level: str | None = None
+    if access_token:
+        try:
+            from agent_trust.auth.agentauth import AgentAuthProvider
+
+            _rl_redis = await get_redis()
+            _rl_provider = AgentAuthProvider(redis_client=_rl_redis)
+            _rl_identity = await _rl_provider.authenticate(access_token=access_token)
+            _rl_agent_id = _rl_identity.agent_id
+            _rl_trust_level = _rl_identity.trust_level
+        except Exception:
+            pass  # unauthenticated path
+
+    from agent_trust.ratelimit import check_rate_limit
+
+    rl_result = await check_rate_limit(
+        agent_id=_rl_agent_id,
+        tool_name="check_trust",
+        trust_level=_rl_trust_level,
+    )
+    if not rl_result.allowed:
+        return {
+            "error": "Rate limit exceeded",
+            "retry_after_seconds": rl_result.retry_after,
+            "limit": rl_result.limit,
+        }
+
     try:
         agent_uuid = uuid.UUID(agent_id)
     except ValueError:

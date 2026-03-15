@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/workers/alert_dispatcher.py
+# hypothesis_version: 6.151.9
+
+[0.0, 'agent_id', 'alert_check', 'alert_dispatched', 'alerts_dispatched', 'callback_tool', 'delta', 'error', 'new_score', 'old_score', 'subscriber_id', 'timestamp', 'watched_agent_id']

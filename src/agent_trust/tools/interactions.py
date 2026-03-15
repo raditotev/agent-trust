@@ -57,6 +57,19 @@ async def report_interaction(
     except (AuthenticationError, AuthorizationError) as e:
         return {"error": str(e)}
 
+    from agent_trust.ratelimit import check_rate_limit
+
+    rl_result = await check_rate_limit(
+        agent_id=identity.agent_id,
+        tool_name="report_interaction",
+        trust_level=identity.trust_level,
+    )
+    if not rl_result.allowed:
+        return {
+            "error": "Rate limit exceeded",
+            "retry_after_seconds": rl_result.retry_after,
+        }
+
     if interaction_type not in VALID_INTERACTION_TYPES:
         return {
             "error": f"Invalid interaction_type. Must be one of: {sorted(VALID_INTERACTION_TYPES)}"

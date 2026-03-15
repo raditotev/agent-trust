@@ -30,6 +30,9 @@ class Agent(Base):
         TIMESTAMP(timezone=True), server_default=func.now()
     )
     status: Mapped[str] = mapped_column(String(20), server_default="active")
+    delegated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     __table_args__ = (
         Index("idx_agents_public_key", "public_key", postgresql_where="public_key IS NOT NULL"),

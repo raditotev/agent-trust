@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/tools/interactions.py
+# hypothesis_version: 6.151.9
+
+[200, 365, 'Rate limit exceeded', 'agent_id', 'arq_enqueue_failed', 'collaboration', 'count', 'counterparty', 'counterparty_id', 'delegation', 'error', 'failure', 'initiator', 'interaction_id', 'interaction_reported', 'interaction_type', 'interactions', 'mutually_confirmed', 'outcome', 'partial', 'query', 'recompute_score', 'report_interaction', 'reported_at', 'reporter_id', 'retry_after_seconds', 'role', 'since_days', 'success', 'timeout', 'transaction', 'trust.report']

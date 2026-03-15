@@ -123,3 +123,22 @@
 - trust://disputes/{id} — full dispute record
 - trust://health — DB/Redis/AgentAuth MCP reachability
 - attestation_expiry worker: marks expired attestations as revoked
+
+## Phase 4 Progress
+
+### Task 17: MCP Prompts ✅
+- evaluate_counterparty: PROCEED/CAUTION/DECLINE framework with score/confidence thresholds
+- explain_score_change: diagnostic guide for identifying score change drivers
+- dispute_assessment: arbitrator guide for structured evidence-based resolution
+- All 3 prompts registered on FastMCP server and visible in MCP Inspector
+
+### Task 22: AgentAuth Scripts ✅
+- scripts/register_scopes.py: connects to AgentAuth MCP, calls quickstart + scope registration tools
+  gracefully degrades when AGENTAUTH_ACCESS_TOKEN not set (prints scope definitions instead)
+- scripts/seed_test_agents.py: creates Alice/Bob/Eve test agents for development
+
+### Task 18: Alert Subscriptions + Dispatcher ✅
+- subscribe_alerts: requires trust.admin scope; upserts subscription with callback_tool and threshold_delta
+- alert_dispatcher worker: checks all active subscriptions on score recompute; dispatches if delta >= threshold
+- score_recomputer updated: reads old score before recompute, enqueues dispatch_alerts on change
+- Subscription uniqueness: one subscription per (subscriber, watched_agent) pair, upsert on duplicate

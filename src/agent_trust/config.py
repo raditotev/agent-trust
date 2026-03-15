@@ -33,5 +33,13 @@ class Settings(BaseSettings):
     mcp_transport: Literal["stdio", "streamable-http"] = "stdio"
     mcp_port: int = 8000
 
+    # Rate limiting (requests per minute per agent)
+    rate_limit_base: int = 60
+    rate_limit_root_multiplier: float = 5.0
+    rate_limit_delegated_multiplier: float = 2.0
+    rate_limit_standalone_multiplier: float = 1.0
+    rate_limit_ephemeral_multiplier: float = 0.5
+    rate_limit_unauthenticated: int = 10
+
 
 settings = Settings()

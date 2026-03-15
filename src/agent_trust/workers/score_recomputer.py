@@ -34,7 +34,27 @@ async def recompute_score(ctx: dict, agent_id: str) -> dict:
     )
 
     updated_scores = {}
+    old_overall = None
+
     async with get_session() as session:
+        # Read old overall score before recomputing so we can detect changes
+        from sqlalchemy import select
+
+        from agent_trust.models import TrustScore as TrustScoreModel
+
+        try:
+            old_result = await session.execute(
+                select(TrustScoreModel).where(
+                    TrustScoreModel.agent_id == agent_uuid,
+                    TrustScoreModel.score_type == "overall",
+                )
+            )
+            old_row = old_result.scalar_one_or_none()
+            if old_row:
+                old_overall = float(old_row.score)
+        except Exception as e:
+            log.debug("old_score_fetch_failed", agent_id=agent_id, error=str(e))
+
         for score_type in SCORE_TYPES:
             try:
                 trust_score = await engine.compute(agent_uuid, score_type, session)
@@ -61,6 +81,25 @@ async def recompute_score(ctx: dict, agent_id: str) -> dict:
         log.debug("score_cache_invalidated", agent_id=agent_id)
     except Exception as e:
         log.warning("cache_invalidation_failed", agent_id=agent_id, error=str(e))
+
+    # Enqueue alert dispatch if the overall score changed
+    new_overall = updated_scores.get("overall")
+    if old_overall is not None and new_overall is not None:
+        try:
+            import arq
+
+            redis_settings = arq.connections.RedisSettings.from_dsn(settings.redis_url)
+            redis_pool = await arq.create_pool(redis_settings)
+            await redis_pool.enqueue_job("dispatch_alerts", agent_id, old_overall, new_overall)
+            await redis_pool.aclose()
+            log.debug(
+                "alert_dispatch_enqueued",
+                agent_id=agent_id,
+                old_overall=old_overall,
+                new_overall=new_overall,
+            )
+        except Exception as e:
+            log.warning("alert_dispatch_enqueue_failed", error=str(e))
 
     log.info("recompute_score_done", agent_id=agent_id, scores=updated_scores)
     return {"agent_id": agent_id, "updated_scores": updated_scores}
