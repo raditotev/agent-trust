@@ -106,3 +106,9 @@
 - alert_dispatcher: stub ready for Task 18
 - WorkerSettings: arq configuration for worker process
 - scripts/run_worker.py: worker process entry point
+
+### Task 15: Dispute Impact on Scores ✅
+- Upheld disputes: 0.03 penalty per lost dispute, floored at 0.50 (penalizes agent filed against)
+- Dismissed disputes: 0.01 penalty per frivolous filing, floored at 0.90 (penalizes filer)
+- Both penalties tracked in factor_breakdown for full transparency
+- resolve_dispute already triggers immediate score recomputation via arq
