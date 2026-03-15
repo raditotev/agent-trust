@@ -1,15 +1,19 @@
-version: "3.9"
 services:
   postgres:
     image: timescale/timescaledb:latest-pg16
     environment:
       POSTGRES_DB: agent_trust
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: agent_trust
+      POSTGRES_PASSWORD: agent_trust
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_trust"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -17,6 +21,47 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  agent-trust:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgres+asyncpg://agent_trust:agent_trust@postgres:5432/agent_trust
+      REDIS_URL: redis://redis:6379/0
+      AUTH_PROVIDER: both
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: "8000"
+      JSON_LOGS: "true"
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./keys:/app/keys
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["uv", "run", "python", "scripts/run_worker.py"]
+    environment:
+      DATABASE_URL: postgres+asyncpg://agent_trust:agent_trust@postgres:5432/agent_trust
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./keys:/app/keys
+    restart: unless-stopped
 
 volumes:
   postgres_data:
