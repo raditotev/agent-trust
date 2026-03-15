@@ -9,6 +9,12 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from agent_trust.config import settings
+from agent_trust.resources.attestations_resource import get_agent_attestations
+from agent_trust.resources.disputes_resource import get_dispute
+from agent_trust.resources.health import get_health
+from agent_trust.resources.history import get_agent_history
+from agent_trust.resources.leaderboard import get_leaderboard
+from agent_trust.resources.scores import get_agent_score
 from agent_trust.tools.agents import (
     get_agent_profile,
     link_agentauth,
@@ -16,9 +22,9 @@ from agent_trust.tools.agents import (
     search_agents,
     whoami,
 )
+from agent_trust.tools.attestations import issue_attestation, verify_attestation
 from agent_trust.tools.disputes import file_dispute, resolve_dispute
 from agent_trust.tools.interactions import get_interaction_history, report_interaction
-from agent_trust.tools.attestations import issue_attestation, verify_attestation
 from agent_trust.tools.scoring import check_trust, compare_agents, get_score_breakdown
 
 structlog.configure(
@@ -71,6 +77,43 @@ mcp.tool()(compare_agents)
 # Register attestation tools
 mcp.tool()(issue_attestation)
 mcp.tool()(verify_attestation)
+
+
+# Register resources
+@mcp.resource("trust://agents/{agent_id}/score")
+async def agent_score_resource(agent_id: str) -> str:
+    """Current trust scores for an agent in all categories."""
+    return await get_agent_score(agent_id)
+
+
+@mcp.resource("trust://agents/{agent_id}/history")
+async def agent_history_resource(agent_id: str) -> str:
+    """Recent interaction history summary (last 90 days)."""
+    return await get_agent_history(agent_id)
+
+
+@mcp.resource("trust://agents/{agent_id}/attestations")
+async def agent_attestations_resource(agent_id: str) -> str:
+    """Active (non-expired, non-revoked) attestations for an agent."""
+    return await get_agent_attestations(agent_id)
+
+
+@mcp.resource("trust://leaderboard/{score_type}")
+async def leaderboard_resource(score_type: str) -> str:
+    """Top 50 agents ranked by the specified score type."""
+    return await get_leaderboard(score_type)
+
+
+@mcp.resource("trust://disputes/{dispute_id}")
+async def dispute_resource(dispute_id: str) -> str:
+    """Full details of a specific dispute."""
+    return await get_dispute(dispute_id)
+
+
+@mcp.resource("trust://health")
+async def health_resource() -> str:
+    """Service health: DB, Redis, AgentAuth MCP reachability, worker queue."""
+    return await get_health()
 
 
 async def lifespan_startup() -> None:
