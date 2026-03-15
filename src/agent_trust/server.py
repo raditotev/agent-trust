@@ -16,6 +16,7 @@ from agent_trust.tools.agents import (
     search_agents,
     whoami,
 )
+from agent_trust.tools.interactions import get_interaction_history, report_interaction
 
 structlog.configure(
     processors=[
@@ -50,6 +51,10 @@ mcp.tool()(link_agentauth)
 mcp.tool()(whoami)
 mcp.tool()(get_agent_profile)
 mcp.tool()(search_agents)
+
+# Register interaction tools
+mcp.tool()(report_interaction)
+mcp.tool()(get_interaction_history)
 
 
 async def lifespan_startup() -> None:

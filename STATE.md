@@ -47,3 +47,12 @@
 - factories.py: make_agent, make_standalone_agent, make_interaction, make_trust_score, make_dispute helpers
 - Integration tests: AgentAuth flow (identity extraction, trust levels), standalone registration flow
 - Phase 1 complete: all 6 tasks done, MCP server running with 5 agent tools
+
+## Phase 2 Progress
+
+### Task 7: Interaction Reporting Tool ✅
+- report_interaction: requires trust.report scope, validates agents exist, detects mutual confirmation
+- get_interaction_history: optional auth, filters by type/outcome, up to 200 results, 365 days back
+- Immutable event log pattern: interactions are append-only
+- Enqueues async score recomputation via arq after each report
+- Scope enforcement tested: agents without trust.report are rejected
