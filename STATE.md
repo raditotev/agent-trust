@@ -41,3 +41,9 @@
 - get_agent_profile: public profile lookup with optional auth for full detail
 - search_agents: filter by min_score, capabilities, min_interactions
 - All 5 tools registered on FastMCP server and tested
+
+### Task 6: Test Infrastructure ✅
+- conftest.py: in-memory SQLite session fixture, Redis mock, AgentAuth mock fixtures
+- factories.py: make_agent, make_standalone_agent, make_interaction, make_trust_score, make_dispute helpers
+- Integration tests: AgentAuth flow (identity extraction, trust levels), standalone registration flow
+- Phase 1 complete: all 6 tasks done, MCP server running with 5 agent tools

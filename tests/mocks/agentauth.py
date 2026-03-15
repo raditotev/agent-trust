@@ -37,7 +37,14 @@ def make_permission_check(allowed: bool = True) -> dict:
 
 MOCK_ROOT_AGENT = make_token_introspection(
     trust_level="root",
-    scopes=["trust.read", "trust.report", "trust.dispute.file", "trust.dispute.resolve", "trust.attest.issue", "trust.admin"],
+    scopes=[
+        "trust.read",
+        "trust.report",
+        "trust.dispute.file",
+        "trust.dispute.resolve",
+        "trust.attest.issue",
+        "trust.admin",
+    ],
 )
 
 MOCK_DELEGATED_AGENT = make_token_introspection(

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from agent_trust.auth.standalone import StandaloneProvider
+import pytest
+
 from agent_trust.auth.identity import AuthenticationError
+from agent_trust.auth.standalone import StandaloneProvider
 
 
 @pytest.fixture
@@ -34,6 +35,7 @@ async def test_authenticate_unknown_key(provider):
 @pytest.mark.asyncio
 async def test_authenticate_known_key():
     import uuid
+
     mock_agent = MagicMock()
     mock_agent.agent_id = uuid.uuid4()
 
@@ -51,6 +53,7 @@ async def test_authenticate_known_key():
 @pytest.mark.asyncio
 async def test_check_permission_always_false(provider):
     from agent_trust.auth.identity import AgentIdentity
+
     identity = AgentIdentity(agent_id="test", source="standalone", scopes=["trust.read"])
     result = await provider.check_permission(identity, "execute", "/trust/disputes/resolve")
     assert result is False

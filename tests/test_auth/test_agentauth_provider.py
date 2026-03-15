@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from agent_trust.auth.agentauth import AgentAuthProvider
 from agent_trust.auth.identity import AuthenticationError

@@ -71,7 +71,10 @@ class TestRegisterAgent:
         agent = _make_agent(_AA_AGENT_ID)
 
         with (
-            patch("agent_trust.tools.agents._resolve_identity", new=AsyncMock(return_value=identity)),
+            patch(
+                "agent_trust.tools.agents._resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
             patch(
                 "agent_trust.tools.agents._ensure_agent_profile",
                 new=AsyncMock(return_value=(agent, True)),
@@ -107,7 +110,10 @@ class TestRegisterAgent:
         agent = _make_agent(_AA_AGENT_ID)
 
         with (
-            patch("agent_trust.tools.agents._resolve_identity", new=AsyncMock(return_value=identity)),
+            patch(
+                "agent_trust.tools.agents._resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
             patch(
                 "agent_trust.tools.agents._ensure_agent_profile",
                 new=AsyncMock(return_value=(agent, False)),
@@ -216,7 +222,10 @@ class TestWhoami:
         mock_ctx.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("agent_trust.tools.agents._resolve_identity", new=AsyncMock(return_value=identity)),
+            patch(
+                "agent_trust.tools.agents._resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
             patch("agent_trust.tools.agents.get_session", return_value=mock_ctx),
         ):
             result = await whoami(access_token="tok")
@@ -241,7 +250,10 @@ class TestWhoami:
         mock_ctx.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("agent_trust.tools.agents._resolve_identity", new=AsyncMock(return_value=identity)),
+            patch(
+                "agent_trust.tools.agents._resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
             patch("agent_trust.tools.agents.get_session", return_value=mock_ctx),
         ):
             result = await whoami(access_token="tok")
@@ -320,7 +332,10 @@ class TestGetAgentProfile:
         mock_ctx.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("agent_trust.tools.agents._resolve_identity", new=AsyncMock(return_value=identity)),
+            patch(
+                "agent_trust.tools.agents._resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
             patch("agent_trust.tools.agents.get_session", return_value=mock_ctx),
         ):
             result = await get_agent_profile(_AA_AGENT_ID, access_token="tok")

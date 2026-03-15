@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import time
-import pytest
 from unittest.mock import AsyncMock
 
-from agent_trust.auth.cache import cached_introspect, invalidate_token_cache
+import pytest
+
+from agent_trust.auth.cache import cached_introspect
 
 
 @pytest.mark.asyncio
@@ -14,11 +15,13 @@ async def test_cache_miss_calls_introspect():
     redis_mock.get = AsyncMock(return_value=None)
     redis_mock.setex = AsyncMock()
 
-    introspect_fn = AsyncMock(return_value={
-        "active": True,
-        "sub": "agent-123",
-        "exp": int(time.time()) + 3600,
-    })
+    introspect_fn = AsyncMock(
+        return_value={
+            "active": True,
+            "sub": "agent-123",
+            "exp": int(time.time()) + 3600,
+        }
+    )
 
     result = await cached_introspect("test-token", introspect_fn, redis_mock)
 
@@ -61,11 +64,13 @@ async def test_ttl_capped_at_300():
     redis_mock.setex = AsyncMock()
 
     # Token expires in 1 hour — TTL should be capped at 300s
-    introspect_fn = AsyncMock(return_value={
-        "active": True,
-        "sub": "agent-123",
-        "exp": int(time.time()) + 7200,
-    })
+    introspect_fn = AsyncMock(
+        return_value={
+            "active": True,
+            "sub": "agent-123",
+            "exp": int(time.time()) + 7200,
+        }
+    )
 
     await cached_introspect("test-token", introspect_fn, redis_mock)
 

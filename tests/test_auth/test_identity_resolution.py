@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import pytest
-
-from agent_trust.auth.identity import AgentIdentity, AuthenticationError
+from agent_trust.auth.identity import AgentIdentity
 
 
 def test_agent_identity_has_scope():
