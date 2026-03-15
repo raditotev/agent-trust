@@ -33,3 +33,11 @@
 - structlog JSON/console logging configured
 - __main__.py for python -m agent_trust invocation
 - pyproject.toml scripts entry point: agent-trust
+
+### Task 5: Agent Registration + Identity Tools ✅
+- register_agent: AgentAuth token path (auto-creates profile from introspection) and Ed25519 standalone path
+- link_agentauth: merges standalone profile into AgentAuth identity (one-time, irreversible)
+- whoami: returns caller identity, scores, scopes, registration date
+- get_agent_profile: public profile lookup with optional auth for full detail
+- search_agents: filter by min_score, capabilities, min_interactions
+- All 5 tools registered on FastMCP server and tested
