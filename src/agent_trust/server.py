@@ -9,6 +9,13 @@ import structlog
 from mcp.server.fastmcp import FastMCP
 
 from agent_trust.config import settings
+from agent_trust.tools.agents import (
+    get_agent_profile,
+    link_agentauth,
+    register_agent,
+    search_agents,
+    whoami,
+)
 
 structlog.configure(
     processors=[
@@ -36,6 +43,13 @@ mcp = FastMCP(
         "Use file_dispute to contest incorrect interaction reports."
     ),
 )
+
+# Register agent identity and registration tools
+mcp.tool()(register_agent)
+mcp.tool()(link_agentauth)
+mcp.tool()(whoami)
+mcp.tool()(get_agent_profile)
+mcp.tool()(search_agents)
 
 
 async def lifespan_startup() -> None:
