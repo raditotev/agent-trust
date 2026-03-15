@@ -16,6 +16,7 @@ from agent_trust.tools.agents import (
     search_agents,
     whoami,
 )
+from agent_trust.tools.disputes import file_dispute, resolve_dispute
 from agent_trust.tools.interactions import get_interaction_history, report_interaction
 
 structlog.configure(
@@ -55,6 +56,10 @@ mcp.tool()(search_agents)
 # Register interaction tools
 mcp.tool()(report_interaction)
 mcp.tool()(get_interaction_history)
+
+# Register dispute tools
+mcp.tool()(file_dispute)
+mcp.tool()(resolve_dispute)
 
 
 async def lifespan_startup() -> None:

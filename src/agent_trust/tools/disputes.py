@@ -165,9 +165,7 @@ async def resolve_dispute(
         return {"error": f"Invalid UUID: {e}"}
 
     async with get_session() as session:
-        result = await session.execute(
-            select(Dispute).where(Dispute.dispute_id == dispute_uuid)
-        )
+        result = await session.execute(select(Dispute).where(Dispute.dispute_id == dispute_uuid))
         dispute = result.scalar_one_or_none()
         if not dispute:
             return {"error": f"Dispute not found: {dispute_id}"}
@@ -209,6 +207,7 @@ async def _enqueue_dispute_recomputation(agent_id_1: str, agent_id_2: str) -> No
     """Enqueue immediate score recomputation for both parties after dispute resolution."""
     try:
         import arq
+
         redis_pool = await arq.create_pool(
             arq.connections.RedisSettings.from_dsn(settings.redis_url)
         )

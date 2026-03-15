@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/tools/disputes.py
+# hypothesis_version: 6.151.9
+
+['arq_enqueue_failed', 'created_at', 'dismissed', 'dispute_filed', 'dispute_id', 'dispute_resolved', 'error', 'execute', 'filed_against', 'interaction_id', 'open', 'recompute_score', 'resolution', 'resolution_note', 'resolved', 'resolved_at', 'resolved_by', 'split', 'status', 'trust.dispute.file', 'upheld']

@@ -76,3 +76,12 @@
 - scripts/generate_keypair.py: generates service keypair to keys/ directory
 - keys/ directory in .gitignore for security
 - Tests: sign/verify roundtrip, expired/tampered/wrong-key rejection
+
+### Task 14: Dispute Tools with AgentAuth RBAC ✅
+- file_dispute: requires trust.dispute.file scope; filer must be party to the interaction
+- resolve_dispute: requires trust.dispute.resolve scope AND AgentAuth check_permission
+  for 'execute' on '/trust/disputes/resolve' (arbitrator policy via AgentAuth)
+- Double authorization: scope check (JWT claims) + AgentAuth policy engine
+- Resolution: upheld (penalizes target), dismissed (penalizes filer), split
+- Triggers immediate score recomputation via arq after resolution
+- Tests: scope enforcement, AgentAuth RBAC gating, party validation
