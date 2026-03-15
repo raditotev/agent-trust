@@ -142,3 +142,10 @@
 - alert_dispatcher worker: checks all active subscriptions on score recompute; dispatches if delta >= threshold
 - score_recomputer updated: reads old score before recompute, enqueues dispatch_alerts on change
 - Subscription uniqueness: one subscription per (subscriber, watched_agent) pair, upsert on duplicate
+
+### Task 20: Rate Limiting ✅
+- Sliding-window rate limiter (60s ZSET per agent+tool key in Redis)
+- Trust level multipliers: root=5x (300/min), delegated=2x (120/min), standalone=1x (60/min), ephemeral=0.5x (30/min), anon=10/min
+- Integrated into check_trust and report_interaction
+- Returns retry_after_seconds when limit exceeded
+- Fail-open: Redis unavailability allows requests through with a warning log

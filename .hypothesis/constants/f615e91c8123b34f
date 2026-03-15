@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/engine/sybil_detector.py
+# hypothesis_version: 6.151.9
+
+[0.0, 0.04, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.85, 0.9, 1.0, 'burst_count', 'burst_registration', 'chain_depth', 'delegation_chain', 'mutual_count', 'reported_agents', 'ring_reporting', 'success', 'sybil_check_complete', 'window_hours']

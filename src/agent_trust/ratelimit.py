@@ -50,7 +50,12 @@ async def check_rate_limit(
         else:
             multiplier = TRUST_LEVEL_MULTIPLIERS.get(trust_level or "standalone", 1.0)
             limit = int(settings.rate_limit_base * multiplier)
-        return RateLimitResult(allowed=True, limit=limit, remaining=limit, reset_at=int(time.time()) + 60)
+        return RateLimitResult(
+            allowed=True,
+            limit=limit,
+            remaining=limit,
+            reset_at=int(time.time()) + 60,
+        )
 
     window_seconds = 60
     now_ms = int(time.time() * 1000)
@@ -74,7 +79,12 @@ async def check_rate_limit(
         results = await pipe.execute()
     except Exception as e:
         log.warning("rate_limit_check_failed", error=str(e))
-        return RateLimitResult(allowed=True, limit=limit, remaining=limit, reset_at=int(time.time()) + window_seconds)
+        return RateLimitResult(
+            allowed=True,
+            limit=limit,
+            remaining=limit,
+            reset_at=int(time.time()) + window_seconds,
+        )
 
     current_count = results[1]  # count BEFORE adding this request
 

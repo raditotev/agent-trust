@@ -137,8 +137,6 @@ async def check_trust(
     _rl_trust_level: str | None = None
     if access_token:
         try:
-            from agent_trust.auth.agentauth import AgentAuthProvider
-
             _rl_redis = await get_redis()
             _rl_provider = AgentAuthProvider(redis_client=_rl_redis)
             _rl_identity = await _rl_provider.authenticate(access_token=access_token)
