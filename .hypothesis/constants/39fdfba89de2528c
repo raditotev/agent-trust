@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/models/alert_subscription.py
+# hypothesis_version: 6.151.9
+
+[200, '0.0500', 'agents.agent_id', 'alert_subscriptions', 'subscriber_id', 'true', 'uq_subscription', 'watched_agent_id']

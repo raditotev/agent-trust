@@ -65,8 +65,7 @@ async def test_all_failure_interactions_low_score(engine: ScoreComputation) -> N
     counterparty_id = uuid.uuid4()
 
     interactions = [
-        make_interaction(agent_id, counterparty_id, outcome="failure")
-        for _ in range(20)
+        make_interaction(agent_id, counterparty_id, outcome="failure") for _ in range(20)
     ]
 
     engine._fetch_interactions = AsyncMock(return_value=interactions)
@@ -212,9 +211,7 @@ async def test_confidence_increases_with_interactions(engine: ScoreComputation) 
         confidences.append(score.confidence)
 
     for i in range(len(confidences) - 1):
-        assert confidences[i] <= confidences[i + 1], (
-            f"Confidence not monotone at index {i}"
-        )
+        assert confidences[i] <= confidences[i + 1], f"Confidence not monotone at index {i}"
 
 
 @pytest.mark.asyncio
@@ -247,7 +244,9 @@ async def test_partial_outcome_intermediate_score(engine: ScoreComputation) -> N
         engine._fetch_interactions = AsyncMock(return_value=interactions)
         score = await engine.compute(agent_id, "overall", AsyncMock())
         lo, hi = expected_range
-        assert lo <= score.score <= hi, f"outcome={outcome} score={score.score} not in {expected_range}"
+        assert lo <= score.score <= hi, (
+            f"outcome={outcome} score={score.score} not in {expected_range}"
+        )
 
 
 # Property-based test with hypothesis
@@ -266,11 +265,9 @@ def test_score_bounded_property(n_success: int, n_failure: int) -> None:
         counterparty_id = uuid.uuid4()
 
         interactions = [
-            make_interaction(agent_id, counterparty_id, outcome="success")
-            for _ in range(n_success)
+            make_interaction(agent_id, counterparty_id, outcome="success") for _ in range(n_success)
         ] + [
-            make_interaction(agent_id, counterparty_id, outcome="failure")
-            for _ in range(n_failure)
+            make_interaction(agent_id, counterparty_id, outcome="failure") for _ in range(n_failure)
         ]
 
         engine._fetch_interactions = AsyncMock(return_value=interactions)

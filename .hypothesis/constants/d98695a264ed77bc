@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/crypto/jwt.py
+# hypothesis_version: 6.151.9
+
+['EdDSA', 'agent-trust', 'agent_type', 'agentauth_linked', 'exp', 'iat', 'iss', 'jti', 'nbf', 'scores', 'sub', 'unknown', 'verify_exp', 'verify_nbf', 'verify_signature']

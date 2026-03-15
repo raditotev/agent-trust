@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/tools/agents.py
+# hypothesis_version: 6.151.9
+
+[0.0, 0.5, 100, 'active', 'agent_id', 'agentauth', 'agentauth_id', 'agentauth_linked', 'agents', 'auth_source', 'both', 'capabilities', 'confidence', 'created', 'display_name', 'error', 'filters', 'interaction_count', 'invalid_agent_id', 'limit', 'merged', 'message', 'metadata', 'min_interactions', 'min_score', 'not_found', 'note', 'overall', 'registered_at', 'scopes', 'score', 'score_type', 'scores', 'source', 'standalone', 'status', 'total', 'trust_level']

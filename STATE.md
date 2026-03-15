@@ -56,3 +56,13 @@
 - Immutable event log pattern: interactions are append-only
 - Enqueues async score recomputation via arq after each report
 - Scope enforcement tested: agents without trust.report are rejected
+
+### Task 8: Score Engine with AgentAuth Trust Level Weighting ✅
+- Bayesian Beta distribution (α=2, β=2 prior), new agents start at 0.5
+- Time decay: exponential with 90-day half-life
+- Reporter credibility: reporter_trust × trust_level_weight
+- AgentAuth weights: root=1.2x, delegated=1.0x, standalone=0.8x, ephemeral=0.7x
+- Mutual confirmation bonus: 1.5x weight for both-party reported interactions
+- Dispute penalty: floor at 0.50, 0.03 per lost dispute
+- score_type filtering: interactions routed to relevant score categories
+- Property-based tests with hypothesis (200 examples)

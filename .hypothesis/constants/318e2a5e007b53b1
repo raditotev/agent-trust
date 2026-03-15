@@ -1,0 +1,4 @@
+# file: /Users/radi.totev/Projects/ai-agents/agent-trust/src/agent_trust/auth/agentauth.py
+# hypothesis_version: 6.151.9
+
+['Authorization', 'access_token', 'action', 'active', 'agent_id', 'agentauth', 'allowed', 'check_permission', 'ephemeral', 'introspect_token', 'resource', 'scope', 'scopes', 'sub', 'text', 'token', 'trust_level']
