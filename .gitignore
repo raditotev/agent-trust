@@ -13,3 +13,5 @@ wheels/
 keys/
 *.key
 *.pem
+
+.env
