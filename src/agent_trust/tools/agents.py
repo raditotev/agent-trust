@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from agent_trust.auth.agentauth import AgentAuthProvider
 from agent_trust.auth.identity import AgentIdentity, AuthenticationError
-from agent_trust.auth.standalone import STANDALONE_SCOPES, StandaloneProvider
+from agent_trust.auth.standalone import STANDALONE_SCOPES
 from agent_trust.config import settings
 from agent_trust.db.redis import get_redis
 from agent_trust.db.session import get_session
@@ -23,22 +23,10 @@ async def _resolve_identity(
     access_token: str | None,
     public_key_hex: str | None,
 ) -> AgentIdentity:
-    """Resolve agent identity from AgentAuth token or standalone key."""
-    redis = await get_redis()
+    """Resolve agent identity from AgentAuth token, standalone signed JWT, or public key."""
+    from agent_trust.auth.resolve import resolve_identity
 
-    if access_token and settings.auth_provider in ("agentauth", "both"):
-        provider = AgentAuthProvider(redis_client=redis)
-        return await provider.authenticate(access_token=access_token)
-
-    if public_key_hex and settings.auth_provider in ("standalone", "both"):
-        async with get_session() as session:
-            provider = StandaloneProvider(db_session=session)
-            return await provider.authenticate(public_key_hex=public_key_hex)
-
-    raise AuthenticationError(
-        "Provide access_token (AgentAuth) or public_key_hex (standalone). "
-        f"Current auth_provider setting: {settings.auth_provider}"
-    )
+    return await resolve_identity(access_token=access_token, public_key_hex=public_key_hex)
 
 
 async def _ensure_agent_profile(
@@ -260,6 +248,62 @@ async def link_agentauth(
             "Standalone profile successfully linked to AgentAuth identity. "
             "Use your AgentAuth token for all future calls."
         ),
+    }
+
+
+async def generate_agent_token(
+    agent_id: str,
+    private_key_hex: str,
+    ttl_minutes: int = 60,
+) -> dict:
+    """Generate a signed access token for a standalone agent.
+
+    Standalone agents authenticate by signing short-lived JWTs with their
+    Ed25519 private key. Call this tool to obtain an access_token that can
+    be passed directly to report_interaction, file_dispute, issue_attestation,
+    get_score_breakdown, and any other tool requiring authentication.
+
+    The token is signed using your private key — no key material is stored
+    server-side. When your token expires, call this tool again.
+
+    Typical agent flow:
+      1. Call register_agent() once → receive agent_id + private_key_hex
+      2. Call generate_agent_token(agent_id, private_key_hex) → receive access_token
+      3. Pass access_token to authenticated tools
+      4. Repeat step 2 when the token expires (check expires_at)
+
+    Args:
+        agent_id: Your agent UUID (from register_agent).
+        private_key_hex: Your 32-byte Ed25519 private key as 64 hex chars
+                         (private_key_hex from your register_agent response).
+        ttl_minutes: Token lifetime in minutes. Default 60, max 1440 (24 h).
+
+    Returns:
+        access_token: Signed JWT — pass this as access_token to other tools.
+        expires_at: ISO 8601 UTC timestamp when the token expires.
+        ttl_minutes: Actual TTL applied after clamping.
+    """
+    from datetime import UTC, timedelta
+
+    from agent_trust.crypto.agent_token import sign_agent_token
+
+    ttl_minutes = min(max(1, ttl_minutes), 1440)
+
+    try:
+        token = sign_agent_token(agent_id, private_key_hex, ttl_minutes)
+    except AuthenticationError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"Token generation failed: {e}"}
+
+    from datetime import datetime
+
+    expires_at = datetime.now(UTC) + timedelta(minutes=ttl_minutes)
+    return {
+        "access_token": token,
+        "expires_at": expires_at.isoformat(),
+        "ttl_minutes": ttl_minutes,
+        "agent_id": agent_id,
     }
 
 

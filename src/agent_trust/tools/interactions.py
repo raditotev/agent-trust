@@ -17,14 +17,15 @@ VALID_INTERACTION_TYPES = {"transaction", "delegation", "query", "collaboration"
 VALID_OUTCOMES = {"success", "failure", "timeout", "partial"}
 
 
-async def _resolve_identity_for_interaction(access_token: str):
-    """Resolve and validate agent identity for interaction reporting."""
-    from agent_trust.auth.agentauth import AgentAuthProvider
-    from agent_trust.db.redis import get_redis
+async def _resolve_identity_for_interaction(access_token: str | None):
+    """Resolve and validate agent identity for interaction reporting.
 
-    redis = await get_redis()
-    provider = AgentAuthProvider(redis_client=redis)
-    return await provider.authenticate(access_token=access_token)
+    Delegates to the shared resolver which handles AgentAuth tokens,
+    standalone signed JWTs, and (legacy) public key lookups.
+    """
+    from agent_trust.auth.resolve import resolve_identity
+
+    return await resolve_identity(access_token=access_token)
 
 
 async def report_interaction(
@@ -45,6 +46,11 @@ async def report_interaction(
     outcome options: success | failure | timeout | partial
     context: optional dict with amount, task_type, duration_ms, sla_met
     evidence_hash: optional SHA-256 hash of supporting evidence
+
+    Authentication via access_token:
+    - AgentAuth token: obtain from agentauth.radi.pro
+    - Standalone signed JWT: generate with scripts/generate_agent_token.py
+      using your agent's private_key_hex from registration
 
     Returns interaction_id and whether the counterparty has also
     reported on this interaction (mutually_confirmed).

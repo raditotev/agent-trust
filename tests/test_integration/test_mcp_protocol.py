@@ -6,11 +6,11 @@ Uses an in-process MCP client/server pair (create_connected_server_and_client_se
 All infrastructure (DB, Redis, HTTP auth) is mocked per test.
 
 Coverage:
-  Protocol  : initialize, tools/list (15 tools), resources/list, resource_templates, prompts/list
-  Tools (15): register_agent, link_agentauth, whoami, get_agent_profile, search_agents,
-              report_interaction, get_interaction_history, file_dispute, resolve_dispute,
-              check_trust, get_score_breakdown, compare_agents, issue_attestation,
-              verify_attestation, sybil_check
+  Protocol  : initialize, tools/list (16 tools), resources/list, resource_templates, prompts/list
+  Tools (16): register_agent, link_agentauth, generate_agent_token, whoami, get_agent_profile,
+              search_agents, report_interaction, get_interaction_history, file_dispute,
+              resolve_dispute, check_trust, get_score_breakdown, compare_agents,
+              issue_attestation, verify_attestation, sybil_check
   Resources (6): trust://health, agent score, agent history, agent attestations, leaderboard, dispute
   Prompts   (3): evaluate_counterparty_prompt, explain_score_change_prompt, dispute_assessment_prompt
 """
@@ -40,6 +40,7 @@ EXPECTED_TOOLS = {
     "check_trust",
     "compare_agents",
     "file_dispute",
+    "generate_agent_token",
     "get_agent_profile",
     "get_interaction_history",
     "get_score_breakdown",
@@ -297,6 +298,197 @@ class TestRegisterAgentMCP:
         )
         assert r.isError
         assert "Invalid public_key_hex" in r.content[0].text
+
+
+# ---------------------------------------------------------------------------
+# generate_agent_token
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateAgentTokenMCP:
+    """Verify generate_agent_token produces valid signed JWTs via the MCP protocol.
+
+    These tests use real Ed25519 key generation (no mocks needed — the tool
+    is pure crypto with no DB or Redis dependencies).
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_signed_jwt(self, mcp_session):
+        """Valid keypair → access_token is a well-formed signed JWT."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        private_key = Ed25519PrivateKey.generate()
+        private_key_hex = private_key.private_bytes_raw().hex()
+        agent_id = str(uuid.uuid4())
+
+        r = await mcp_session.call_tool(
+            "generate_agent_token",
+            {"agent_id": agent_id, "private_key_hex": private_key_hex},
+        )
+
+        assert not r.isError
+        data = _parse(r)
+        assert "access_token" in data
+        assert "expires_at" in data
+        assert data["ttl_minutes"] == 60
+        assert data["agent_id"] == agent_id
+        # Token must be a three-segment JWT
+        assert len(data["access_token"].split(".")) == 3
+
+    @pytest.mark.asyncio
+    async def test_token_verifies_against_public_key(self, mcp_session):
+        """Token returned by the tool passes cryptographic verification."""
+        import jwt
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        from agent_trust.crypto.agent_token import STANDALONE_TOKEN_AUDIENCE
+
+        private_key = Ed25519PrivateKey.generate()
+        private_key_hex = private_key.private_bytes_raw().hex()
+        agent_id = str(uuid.uuid4())
+
+        r = await mcp_session.call_tool(
+            "generate_agent_token",
+            {"agent_id": agent_id, "private_key_hex": private_key_hex},
+        )
+        token = _parse(r)["access_token"]
+
+        payload = jwt.decode(
+            token,
+            private_key.public_key(),
+            algorithms=["EdDSA"],
+            audience=STANDALONE_TOKEN_AUDIENCE,
+        )
+        assert payload["sub"] == agent_id
+        assert payload["iss"] == agent_id
+
+    @pytest.mark.asyncio
+    async def test_token_detected_as_standalone(self, mcp_session):
+        """Token passes the is_standalone_agent_token detector used by the auth router."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        from agent_trust.crypto.agent_token import is_standalone_agent_token
+
+        private_key = Ed25519PrivateKey.generate()
+        agent_id = str(uuid.uuid4())
+
+        r = await mcp_session.call_tool(
+            "generate_agent_token",
+            {"agent_id": agent_id, "private_key_hex": private_key.private_bytes_raw().hex()},
+        )
+        token = _parse(r)["access_token"]
+
+        assert is_standalone_agent_token(token)
+
+    @pytest.mark.asyncio
+    async def test_custom_ttl(self, mcp_session):
+        """ttl_minutes is respected and reflected in the response."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        private_key = Ed25519PrivateKey.generate()
+        agent_id = str(uuid.uuid4())
+
+        r = await mcp_session.call_tool(
+            "generate_agent_token",
+            {
+                "agent_id": agent_id,
+                "private_key_hex": private_key.private_bytes_raw().hex(),
+                "ttl_minutes": 120,
+            },
+        )
+
+        assert not r.isError
+        assert _parse(r)["ttl_minutes"] == 120
+
+    @pytest.mark.asyncio
+    async def test_ttl_clamped_to_max(self, mcp_session):
+        """TTL above 1440 (24 h) is silently clamped."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        private_key = Ed25519PrivateKey.generate()
+
+        r = await mcp_session.call_tool(
+            "generate_agent_token",
+            {
+                "agent_id": str(uuid.uuid4()),
+                "private_key_hex": private_key.private_bytes_raw().hex(),
+                "ttl_minutes": 99999,
+            },
+        )
+
+        assert not r.isError
+        assert _parse(r)["ttl_minutes"] == 1440
+
+    @pytest.mark.asyncio
+    async def test_invalid_private_key_hex_returns_error(self, mcp_session):
+        """Malformed private_key_hex returns an error dict (not isError)."""
+        r = await mcp_session.call_tool(
+            "generate_agent_token",
+            {"agent_id": str(uuid.uuid4()), "private_key_hex": "not-valid-hex!!!"},
+        )
+
+        assert not r.isError  # tool returns {"error": ...} not an MCP-level error
+        data = _parse(r)
+        assert "error" in data
+
+    @pytest.mark.asyncio
+    async def test_token_used_for_report_interaction(self, mcp_session):
+        """End-to-end: token from generate_agent_token works as access_token
+        for report_interaction (the primary use-case for returning agents)."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        from tests.test_integration.conftest import make_standalone_identity
+
+        private_key = Ed25519PrivateKey.generate()
+        agent_id = str(uuid.uuid4())
+
+        # Step 1: generate a token via MCP
+        r = await mcp_session.call_tool(
+            "generate_agent_token",
+            {"agent_id": agent_id, "private_key_hex": private_key.private_bytes_raw().hex()},
+        )
+        token = _parse(r)["access_token"]
+
+        # Step 2: use that token in report_interaction
+        reporter_id = str(uuid.uuid4())
+        counterparty_id = str(uuid.uuid4())
+        identity = make_standalone_identity(reporter_id)
+
+        reporter_agent = _make_orm_agent(uuid.UUID(reporter_id))
+        counterparty_agent = _make_orm_agent(uuid.UUID(counterparty_id))
+        session_ctx = make_session_ctx(reporter_agent, counterparty_agent, None)
+
+        with (
+            patch(
+                "agent_trust.tools.interactions._resolve_identity_for_interaction",
+                new=AsyncMock(return_value=identity),
+            ),
+            patch(
+                "agent_trust.tools.interactions.get_session",
+                return_value=session_ctx(),
+            ),
+            patch(
+                "agent_trust.tools.interactions._enqueue_score_recomputation",
+                new=AsyncMock(),
+            ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+            ),
+        ):
+            r2 = await mcp_session.call_tool(
+                "report_interaction",
+                {
+                    "counterparty_id": counterparty_id,
+                    "interaction_type": "transaction",
+                    "outcome": "success",
+                    "access_token": token,
+                },
+            )
+
+        assert not r2.isError
+        data2 = _parse(r2)
+        assert "interaction_id" in data2
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ def provider():
 
 @pytest.mark.asyncio
 async def test_authenticate_requires_public_key(provider):
-    with pytest.raises(AuthenticationError, match="requires public_key_hex"):
+    with pytest.raises(AuthenticationError, match="Invalid standalone token format"):
         await provider.authenticate(access_token="some-token")
 
 

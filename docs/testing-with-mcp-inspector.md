@@ -88,14 +88,28 @@ Repeat step 1 with `display_name` set to `test-agent-reporter`. You need two age
 
 **Tools → `report_interaction`**
 
-> **Auth required:** `trust.report` scope. See [Authentication](#authentication) below for how to obtain an `access_token`.
+> **Auth required:** `trust.report` scope. First use `generate_agent_token` (step 4b below) to get an `access_token` for the reporter.
+
+**4b. Generate a token for the reporter**
+
+**Tools → `generate_agent_token`**
+
+| Field | Value |
+|---|---|
+| `agent_id` | *(paste agent_id from step 4)* |
+| `private_key_hex` | *(paste private_key_hex from step 4)* |
+| `ttl_minutes` | `60` |
+
+Copy the returned `access_token` — use it in the next call.
+
+**Now call `report_interaction`:**
 
 | Field | Value |
 |---|---|
 | `counterparty_id` | *(paste agent_id from step 1 — the agent being reported on)* |
 | `interaction_type` | `transaction` |
 | `outcome` | `success` |
-| `access_token` | *(your token — the reporter's identity)* |
+| `access_token` | *(paste the token from `generate_agent_token` above)* |
 | `context` | *(leave empty)* |
 | `evidence_hash` | *(leave empty)* |
 
@@ -248,16 +262,21 @@ AgentTrust supports two authentication paths:
 
 ### Standalone Ed25519 (simplest for local testing)
 
-```bash
-# Generate a keypair for your test agent
-uv run python - <<'EOF'
-from agent_trust.crypto.keys import generate_ed25519_keypair, get_public_key_hex
-priv, pub = generate_ed25519_keypair()
-print("Public key hex:", get_public_key_hex(pub))
-EOF
-```
+Standalone agents authenticate with a **short-lived JWT they sign themselves** using their Ed25519 private key. This proves ownership of the private key — unlike a plain key lookup, the server verifies the signature before accepting the identity.
 
-Register the agent with the public key, then sign a token to use as `access_token`.
+**Step 1 — Register an agent** via **Tools → `register_agent`** with any `display_name`. Leave `public_key_hex` empty to auto-generate a keypair. The response includes both `public_key_hex` and `private_key_hex`. Store `private_key_hex` securely — it will not be shown again.
+
+**Step 2 — Generate an access token** via **Tools → `generate_agent_token`**:
+
+| Field | Value |
+|---|---|
+| `agent_id` | *(paste agent_id from step 1)* |
+| `private_key_hex` | *(paste private_key_hex from step 1)* |
+| `ttl_minutes` | `60` |
+
+Copy the returned `access_token`.
+
+**Step 3 — Use the token** as `access_token` in any tool that requires auth. When it expires, call `generate_agent_token` again with the same `private_key_hex`.
 
 ### AgentAuth Token
 

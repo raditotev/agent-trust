@@ -17,6 +17,7 @@ from agent_trust.resources.history import get_agent_history
 from agent_trust.resources.leaderboard import get_leaderboard
 from agent_trust.resources.scores import get_agent_score
 from agent_trust.tools.agents import (
+    generate_agent_token,
     get_agent_profile,
     link_agentauth,
     register_agent,
@@ -47,6 +48,7 @@ mcp = FastMCP(
 # Agent tools
 mcp.tool()(register_agent)
 mcp.tool()(link_agentauth)
+mcp.tool()(generate_agent_token)
 mcp.tool()(whoami)
 mcp.tool()(get_agent_profile)
 mcp.tool()(search_agents)
