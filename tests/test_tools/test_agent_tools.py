@@ -125,10 +125,36 @@ class TestRegisterAgent:
         assert result["created"] is False
 
     @pytest.mark.asyncio
-    async def test_register_agent_no_auth_raises(self):
-        """No token, no key → AuthenticationError."""
-        with pytest.raises(AuthenticationError):
-            await register_agent()
+    async def test_register_agent_no_auth_autogenerates_keypair(self):
+        """No token, no key → auto-generates Ed25519 key pair (standalone mode)."""
+        agent_id = str(uuid.uuid4())
+        agent = _make_agent(agent_id, source="standalone")
+
+        with (
+            patch("agent_trust.tools.agents.settings") as mock_settings,
+            patch(
+                "agent_trust.tools.agents._ensure_agent_profile",
+                new=AsyncMock(return_value=(agent, True)),
+            ),
+        ):
+            mock_settings.auth_provider = "both"
+            result = await register_agent(display_name="auto-agent")
+
+        assert result["source"] == "standalone"
+        assert result["created"] is True
+        assert "public_key_hex" in result
+        assert "private_key_hex" in result
+        assert "warning" in result
+        assert len(bytes.fromhex(result["public_key_hex"])) == 32
+        assert len(bytes.fromhex(result["private_key_hex"])) == 32
+
+    @pytest.mark.asyncio
+    async def test_register_agent_no_auth_raises_when_agentauth_only(self):
+        """No token, no key → AuthenticationError when auth_provider=agentauth."""
+        with patch("agent_trust.tools.agents.settings") as mock_settings:
+            mock_settings.auth_provider = "agentauth"
+            with pytest.raises(AuthenticationError):
+                await register_agent()
 
     @pytest.mark.asyncio
     async def test_register_agent_invalid_hex_raises(self):

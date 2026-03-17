@@ -15,3 +15,6 @@ keys/
 *.pem
 
 .env
+
+# Hypothesis artifacts
+.hypothesis/

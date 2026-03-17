@@ -163,20 +163,39 @@ Per-agent sliding window (60 seconds):
 | `ephemeral`     | 30           |
 | Unauthenticated | 10           |
 
+## Testing
+
+```bash
+# Run the full test suite
+uv run pytest
+
+# Quick summary (no verbose output)
+uv run pytest --tb=short -q
+
+# Run a specific test suite
+uv run pytest tests/test_engine/ -v        # score algorithm (Bayesian model, decay, penalties)
+uv run pytest tests/test_auth/ -v          # auth layer (AgentAuth, standalone Ed25519)
+uv run pytest tests/test_tools/ -v         # MCP tool unit tests (all 15 tools)
+uv run pytest tests/test_integration/ -v   # MCP protocol-level integration tests
+
+# MCP protocol integration tests only (68 tests, no DB/Redis required)
+uv run pytest tests/test_integration/test_mcp_protocol.py -v
+
+# Run a single test class or test
+uv run pytest tests/test_integration/test_mcp_protocol.py::TestRegisterAgentMCP -v
+uv run pytest tests/test_tools/test_agent_tools.py::test_register_agent_standalone -v
+
+# Show coverage
+uv run pytest --cov=agent_trust --cov-report=term-missing
+```
+
+The MCP protocol integration tests (`test_mcp_protocol.py`) use an in-process MCP client/server pair — no running database or Redis instance is required. All external dependencies are mocked per-test.
+
 ## Development
 
 ```bash
 # Install dependencies
 uv sync --extra dev
-
-# Run all tests
-uv run pytest
-
-# Run specific test suites
-uv run pytest tests/test_engine/ -v     # score algorithm
-uv run pytest tests/test_auth/ -v       # auth layer
-uv run pytest tests/test_tools/ -v      # MCP tools
-uv run pytest tests/test_integration/ -v  # end-to-end
 
 # Lint and format
 uv run ruff check src/
