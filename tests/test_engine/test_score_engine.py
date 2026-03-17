@@ -38,13 +38,14 @@ async def test_zero_interactions_returns_neutral_score(engine: ScoreComputation)
 
 @pytest.mark.asyncio
 async def test_all_success_interactions_high_score(engine: ScoreComputation) -> None:
-    """Many successful interactions → score above 0.7."""
+    """Many successful interactions → score above 0.7 (counterparty gets full credit)."""
     agent_id = uuid.uuid4()
     counterparty_id = uuid.uuid4()
-    reporter_id = uuid.uuid4()
 
+    # agent_id is the reporter, counterparty_id is the counterparty
+    # Counterparty gets full credit (α += w) for success
     interactions = [
-        make_interaction(agent_id, counterparty_id, outcome="success", reported_by=reporter_id)
+        make_interaction(agent_id, counterparty_id, outcome="success")
         for _ in range(20)
     ]
 
@@ -54,17 +55,20 @@ async def test_all_success_interactions_high_score(engine: ScoreComputation) -> 
     engine._count_lost_disputes = AsyncMock(return_value=0)
     engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
-    score = await engine.compute(agent_id, "overall", AsyncMock())
+    # Compute for counterparty (who gets full credit for successful delivery)
+    score = await engine.compute(counterparty_id, "overall", AsyncMock())
     assert score.score > 0.7
     assert score.confidence > 0.5
 
 
 @pytest.mark.asyncio
 async def test_all_failure_interactions_low_score(engine: ScoreComputation) -> None:
-    """Many failed interactions → score below 0.3."""
+    """Many failed interactions → score below 0.3 (counterparty gets penalized)."""
     agent_id = uuid.uuid4()
     counterparty_id = uuid.uuid4()
 
+    # agent_id is the reporter, counterparty_id is the counterparty
+    # Only counterparty gets penalized (β += w) for failure
     interactions = [
         make_interaction(agent_id, counterparty_id, outcome="failure") for _ in range(20)
     ]
@@ -75,7 +79,8 @@ async def test_all_failure_interactions_low_score(engine: ScoreComputation) -> N
     engine._count_lost_disputes = AsyncMock(return_value=0)
     engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
-    score = await engine.compute(agent_id, "overall", AsyncMock())
+    # Compute for counterparty (who gets penalized for failures)
+    score = await engine.compute(counterparty_id, "overall", AsyncMock())
     assert score.score < 0.3
 
 
@@ -179,7 +184,7 @@ async def test_score_floor_from_disputes(engine: ScoreComputation) -> None:
 
 @pytest.mark.asyncio
 async def test_score_always_in_unit_interval(engine: ScoreComputation) -> None:
-    """Score is always between 0.0 and 1.0."""
+    """Score is always between 0.0 and 1.0 (test both reporter and counterparty)."""
     agent_id = uuid.uuid4()
     counterparty_id = uuid.uuid4()
 
@@ -193,7 +198,8 @@ async def test_score_always_in_unit_interval(engine: ScoreComputation) -> None:
         engine._count_lost_disputes = AsyncMock(return_value=0)
         engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
-        score = await engine.compute(agent_id, "overall", AsyncMock())
+        # Test counterparty (gets full effect of outcomes)
+        score = await engine.compute(counterparty_id, "overall", AsyncMock())
         assert 0.0 <= score.score <= 1.0, f"Score out of range for outcome={outcome}"
         assert 0.0 <= score.confidence <= 1.0
 
@@ -232,7 +238,7 @@ async def test_trust_level_weights_ordering(engine: ScoreComputation) -> None:
 
 @pytest.mark.asyncio
 async def test_partial_outcome_intermediate_score(engine: ScoreComputation) -> None:
-    """Partial outcomes produce scores between all-failure and all-success."""
+    """Partial outcomes produce scores between all-failure and all-success (counterparty scoring)."""
     agent_id = uuid.uuid4()
     counterparty_id = uuid.uuid4()
 
@@ -242,16 +248,20 @@ async def test_partial_outcome_intermediate_score(engine: ScoreComputation) -> N
     engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
     n = 20
+    # Test counterparty (who gets full effect):
+    # success: α += w → high score
+    # partial: α += 0.5w, β += 0.5w → neutral
+    # failure: β += w → low score
     for outcome, expected_range in [
         ("success", (0.65, 1.0)),
-        ("partial", (0.45, 0.56)),
+        ("partial", (0.45, 0.55)),
         ("failure", (0.0, 0.35)),
     ]:
         interactions = [
             make_interaction(agent_id, counterparty_id, outcome=outcome) for _ in range(n)
         ]
         engine._fetch_interactions = AsyncMock(return_value=interactions)
-        score = await engine.compute(agent_id, "overall", AsyncMock())
+        score = await engine.compute(counterparty_id, "overall", AsyncMock())
         lo, hi = expected_range
         assert lo <= score.score <= hi, (
             f"outcome={outcome} score={score.score} not in {expected_range}"
@@ -265,7 +275,7 @@ async def test_partial_outcome_intermediate_score(engine: ScoreComputation) -> N
 )
 @h_settings(max_examples=200)
 def test_score_bounded_property(n_success: int, n_failure: int) -> None:
-    """Property: score always in [0, 1] for any combination of outcomes."""
+    """Property: score always in [0, 1] for any combination of outcomes (test counterparty)."""
     import asyncio
 
     async def run() -> None:
@@ -273,6 +283,7 @@ def test_score_bounded_property(n_success: int, n_failure: int) -> None:
         agent_id = uuid.uuid4()
         counterparty_id = uuid.uuid4()
 
+        # agent_id is reporter, counterparty_id gets full effect
         interactions = [
             make_interaction(agent_id, counterparty_id, outcome="success") for _ in range(n_success)
         ] + [
@@ -285,7 +296,8 @@ def test_score_bounded_property(n_success: int, n_failure: int) -> None:
         engine._count_lost_disputes = AsyncMock(return_value=0)
         engine._count_dismissed_disputes_filed_by = AsyncMock(return_value=0)
 
-        score = await engine.compute(agent_id, "overall", AsyncMock())
+        # Test counterparty who experiences full scoring effects
+        score = await engine.compute(counterparty_id, "overall", AsyncMock())
         assert 0.0 <= score.score <= 1.0
         assert 0.0 <= score.confidence <= 1.0
 

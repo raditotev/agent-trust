@@ -13,7 +13,7 @@ from agent_trust.config import settings
 from agent_trust.db.redis import get_redis
 from agent_trust.db.session import get_session
 from agent_trust.engine.score_engine import ScoreComputation, upsert_trust_score
-from agent_trust.models import Agent, TrustScore
+from agent_trust.models import Agent
 
 log = structlog.get_logger()
 
@@ -62,42 +62,24 @@ async def _get_or_compute_score(
         return cached
 
     async with get_session() as session:
-        db_result = await session.execute(
-            select(TrustScore).where(
-                TrustScore.agent_id == agent_id,
-                TrustScore.score_type == score_type,
-            )
+        # Always compute fresh on cache miss so scores reflect recent interactions
+        # (avoids returning stale DB values when the arq worker hasn't run yet)
+        engine = ScoreComputation(
+            half_life_days=settings.score_half_life_days,
+            dispute_penalty_per=settings.dispute_penalty,
         )
-        db_score = db_result.scalar_one_or_none()
+        trust_score = await engine.compute(agent_id, score_type, session)
+        await upsert_trust_score(trust_score, session)
 
-        if db_score:
-            score_data = {
-                "agent_id": agent_id_str,
-                "score_type": score_type,
-                "score": float(db_score.score),
-                "confidence": float(db_score.confidence),
-                "interaction_count": db_score.interaction_count,
-                "factor_breakdown": db_score.factor_breakdown,
-                "computed_at": db_score.computed_at.isoformat(),
-            }
-        else:
-            # Compute fresh
-            engine = ScoreComputation(
-                half_life_days=settings.score_half_life_days,
-                dispute_penalty_per=settings.dispute_penalty,
-            )
-            trust_score = await engine.compute(agent_id, score_type, session)
-            await upsert_trust_score(trust_score, session)
-
-            score_data = {
-                "agent_id": agent_id_str,
-                "score_type": score_type,
-                "score": float(trust_score.score),
-                "confidence": float(trust_score.confidence),
-                "interaction_count": trust_score.interaction_count,
-                "factor_breakdown": trust_score.factor_breakdown,
-                "computed_at": trust_score.computed_at.isoformat(),
-            }
+        score_data = {
+            "agent_id": agent_id_str,
+            "score_type": score_type,
+            "score": float(trust_score.score),
+            "confidence": float(trust_score.confidence),
+            "interaction_count": trust_score.interaction_count,
+            "factor_breakdown": trust_score.factor_breakdown,
+            "computed_at": trust_score.computed_at.isoformat(),
+        }
 
         await _cache_score(agent_id_str, score_type, score_data)
         return score_data

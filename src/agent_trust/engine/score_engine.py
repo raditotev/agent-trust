@@ -78,13 +78,22 @@ class ScoreComputation:
             mutual = self.mutual_confirmation_bonus if ix.mutually_confirmed else 1.0
             w = time_weight * credibility * mutual
 
+            is_reporter = ix.reported_by == agent_id
+
             if ix.outcome == "success":
-                alpha += w
+                if is_reporter:
+                    alpha += w * 0.5
+                else:
+                    alpha += w
             elif ix.outcome in ("failure", "timeout"):
-                beta += w
+                if not is_reporter:
+                    beta += w
             elif ix.outcome == "partial":
-                alpha += w * 0.5
-                beta += w * 0.5
+                if is_reporter:
+                    alpha += w * 0.25
+                else:
+                    alpha += w * 0.5
+                    beta += w * 0.5
 
         lost_disputes = await self._count_lost_disputes(agent_id, session)
         penalty = max(

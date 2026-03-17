@@ -73,18 +73,12 @@ def _session_factory(session_mock):
 
 
 def _make_session_for_agent(agent: MagicMock | None, trust_score: MagicMock | None = None):
-    """Mock DB session: call 0 → agent lookup, call 1 → trust score lookup."""
+    """Mock DB session: agent lookup only (score is now always computed fresh, not read from DB)."""
     session = MagicMock()
-    call_count = [0]
 
     async def execute(query):
         result = MagicMock()
-        n = call_count[0]
-        call_count[0] += 1
-        if n == 0:
-            result.scalar_one_or_none = MagicMock(return_value=agent)
-        else:
-            result.scalar_one_or_none = MagicMock(return_value=trust_score)
+        result.scalar_one_or_none = MagicMock(return_value=agent)
         return result
 
     session.execute = execute
@@ -110,12 +104,17 @@ async def test_check_trust_basic():
     """Agent exists → returns score, confidence, interaction_count (unauthenticated)."""
     agent = _make_agent(_AGENT_A)
     trust_score = _make_trust_score(_AGENT_A)
-    session = _make_session_for_agent(agent, trust_score)
+    session = _make_session_for_agent(agent)
     redis_mock = _make_redis_mock()
+
+    mock_engine = MagicMock()
+    mock_engine.compute = AsyncMock(return_value=trust_score)
 
     with (
         patch("agent_trust.tools.scoring.get_session", side_effect=_session_factory(session)),
         patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
+        patch("agent_trust.tools.scoring.ScoreComputation", return_value=mock_engine),
+        patch("agent_trust.tools.scoring.upsert_trust_score", new=AsyncMock()),
     ):
         result = await check_trust(agent_id=_AGENT_A)
 
@@ -133,17 +132,22 @@ async def test_check_trust_with_auth_adds_breakdown():
     """Authenticated with trust.read → factor_breakdown included in response."""
     agent = _make_agent(_AGENT_A)
     trust_score = _make_trust_score(_AGENT_A)
-    session = _make_session_for_agent(agent, trust_score)
+    session = _make_session_for_agent(agent)
     identity = _make_identity(_AGENT_A, scopes=["trust.read"])
     redis_mock = _make_redis_mock()
 
     mock_provider = MagicMock()
     mock_provider.authenticate = AsyncMock(return_value=identity)
 
+    mock_engine = MagicMock()
+    mock_engine.compute = AsyncMock(return_value=trust_score)
+
     with (
         patch("agent_trust.tools.scoring.get_session", side_effect=_session_factory(session)),
         patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
         patch("agent_trust.tools.scoring.AgentAuthProvider", return_value=mock_provider),
+        patch("agent_trust.tools.scoring.ScoreComputation", return_value=mock_engine),
+        patch("agent_trust.tools.scoring.upsert_trust_score", new=AsyncMock()),
     ):
         result = await check_trust(agent_id=_AGENT_A, access_token="tok")
 
@@ -263,33 +267,26 @@ async def test_get_score_breakdown_returns_all_types():
     mock_provider = MagicMock()
     mock_provider.authenticate = AsyncMock(return_value=identity)
 
+    session = _make_session_for_agent(agent)
+    redis_mock = _make_redis_mock()
+
     score_types = ["overall", "reliability", "responsiveness", "honesty"]
-    # Session: 1 agent check + 4 score lookups = 5 execute() calls
-    session = MagicMock()
     call_count = [0]
 
-    async def execute(query):
-        r = MagicMock()
-        n = call_count[0]
+    async def fake_compute(agent_id, score_type, session):
+        ts = _make_trust_score(_AGENT_A, score_type=score_types[call_count[0] % len(score_types)])
         call_count[0] += 1
-        if n == 0:
-            r.scalar_one_or_none = MagicMock(return_value=agent)
-        else:
-            st = score_types[(n - 1) % len(score_types)]
-            r.scalar_one_or_none = MagicMock(
-                return_value=_make_trust_score(_AGENT_A, score_type=st)
-            )
-        return r
+        return ts
 
-    session.execute = execute
-    session.add = MagicMock()
-    session.flush = AsyncMock()
-    redis_mock = _make_redis_mock()
+    mock_engine = MagicMock()
+    mock_engine.compute = fake_compute
 
     with (
         patch("agent_trust.tools.scoring.get_session", side_effect=_session_factory(session)),
         patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
         patch("agent_trust.tools.scoring.AgentAuthProvider", return_value=mock_provider),
+        patch("agent_trust.tools.scoring.ScoreComputation", return_value=mock_engine),
+        patch("agent_trust.tools.scoring.upsert_trust_score", new=AsyncMock()),
     ):
         result = await get_score_breakdown(agent_id=_AGENT_A, access_token="tok")
 
@@ -314,20 +311,16 @@ async def test_compare_agents_ranked():
     ts_a = _make_trust_score(_AGENT_A, score=0.9)
     ts_b = _make_trust_score(_AGENT_B, score=0.4)
 
-    # compare_agents calls get_session() twice per agent:
-    #   call 0: agent_a existence check
-    #   call 1: agent_a score lookup (in _get_or_compute_score)
-    #   call 2: agent_b existence check
-    #   call 3: agent_b score lookup
+    # compare_agents calls get_session() twice (once per agent existence check);
+    # score computation is mocked via ScoreComputation.
     session = MagicMock()
     call_count = [0]
-    responses = [agent_a, ts_a, agent_b, ts_b]
+    agents = [agent_a, agent_b]
 
     async def execute(query):
         r = MagicMock()
-        n = call_count[0]
+        r.scalar_one_or_none = MagicMock(return_value=agents[call_count[0] % len(agents)])
         call_count[0] += 1
-        r.scalar_one_or_none = MagicMock(return_value=responses[n])
         return r
 
     session.execute = execute
@@ -335,18 +328,31 @@ async def test_compare_agents_ranked():
     session.flush = AsyncMock()
     redis_mock = _make_redis_mock()
 
+    scores = [ts_a, ts_b]
+    score_call = [0]
+
+    async def fake_compute(agent_id, score_type, session):
+        ts = scores[score_call[0] % len(scores)]
+        score_call[0] += 1
+        return ts
+
+    mock_engine = MagicMock()
+    mock_engine.compute = fake_compute
+
     with (
         patch("agent_trust.tools.scoring.get_session", side_effect=_session_factory(session)),
         patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
+        patch("agent_trust.tools.scoring.ScoreComputation", return_value=mock_engine),
+        patch("agent_trust.tools.scoring.upsert_trust_score", new=AsyncMock()),
     ):
         result = await compare_agents(agent_ids=[_AGENT_A, _AGENT_B])
 
     assert "error" not in result
     assert result["count"] == 2
-    agents = result["agents"]
-    assert agents[0]["agent_id"] == _AGENT_A
-    assert agents[0]["rank"] == 1
-    assert agents[1]["rank"] == 2
+    agents_result = result["agents"]
+    assert agents_result[0]["agent_id"] == _AGENT_A
+    assert agents_result[0]["rank"] == 1
+    assert agents_result[1]["rank"] == 2
 
 
 @pytest.mark.asyncio
