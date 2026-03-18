@@ -39,22 +39,23 @@ async def check_rate_limit(
     Window is 60 seconds.
 
     Returns RateLimitResult with allowed=False and retry_after if over limit.
-    Falls back to allow=True if Redis is unavailable.
+    Fails closed (allowed=False) if Redis is unavailable for security.
     """
     try:
         redis = await get_redis()
     except Exception as e:
-        log.warning("rate_limit_redis_unavailable", error=str(e))
+        log.warning("rate_limit_redis_unavailable", error=str(e), action="fail_closed")
         if agent_id is None:
             limit = settings.rate_limit_unauthenticated
         else:
             multiplier = TRUST_LEVEL_MULTIPLIERS.get(trust_level or "standalone", 1.0)
             limit = int(settings.rate_limit_base * multiplier)
         return RateLimitResult(
-            allowed=True,
+            allowed=False,
             limit=limit,
-            remaining=limit,
-            reset_at=int(time.time()) + 60,
+            remaining=0,
+            reset_at=int(time.time()) + 10,
+            retry_after=10,
         )
 
     window_seconds = 60
@@ -78,12 +79,13 @@ async def check_rate_limit(
         pipe.expire(key, window_seconds * 2)  # TTL safety
         results = await pipe.execute()
     except Exception as e:
-        log.warning("rate_limit_check_failed", error=str(e))
+        log.warning("rate_limit_check_failed", error=str(e), action="fail_closed")
         return RateLimitResult(
-            allowed=True,
+            allowed=False,
             limit=limit,
-            remaining=limit,
-            reset_at=int(time.time()) + window_seconds,
+            remaining=0,
+            reset_at=int(time.time()) + 10,
+            retry_after=10,
         )
 
     current_count = results[1]  # count BEFORE adding this request

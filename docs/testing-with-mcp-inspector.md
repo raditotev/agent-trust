@@ -118,6 +118,8 @@ Valid values for `outcome`: `success`, `failure`, `timeout`, `partial`
 
 Repeat with a few more reports (mix `success` and `failure` outcomes) to see scoring effects.
 
+> **Limits:** At most 10 interactions may be reported between the same pair per day. Reports with the same (reporter, counterparty, interaction_type) within 1 hour are rejected as duplicates.
+
 ---
 
 ### 6. Observe Score Change
@@ -137,6 +139,8 @@ For a detailed breakdown: **Tools → `get_score_breakdown`**
 
 **Tools → `get_interaction_history`**
 
+> **Auth required:** `trust.read` scope. Use the token generated in step 4b, or generate a new one via `generate_agent_token`.
+
 | Field | Value |
 |---|---|
 | `agent_id` | *(paste agent_id from step 1)* |
@@ -144,7 +148,7 @@ For a detailed breakdown: **Tools → `get_score_breakdown`**
 | `outcome` | *(leave empty for all outcomes)* |
 | `since_days` | `90` |
 | `limit` | `20` |
-| `access_token` | *(leave empty)* |
+| `access_token` | *(token with `trust.read` scope — use the one from step 4b or generate a new one)* |
 
 Copy an `interaction_id` from the response for step 8.
 
@@ -192,7 +196,9 @@ Resolving as `upheld` applies a score penalty to the agent who filed the origina
 |---|---|
 | `agent_id` | *(paste agent_id from step 1)* |
 | `access_token` | *(token with `trust.attest.issue` scope)* |
-| `ttl_hours` | `24` |
+| `ttl_hours` | `12` |
+
+> **Note:** The default TTL is 12 hours. The maximum allowed TTL is 72 hours. Attestations are automatically revoked if the agent's trust score drops by more than 0.10 after issuance.
 
 Returns a signed JWT. Copy the `jwt_token` value for the next step.
 
@@ -284,7 +290,7 @@ Set `AGENTAUTH_ACCESS_TOKEN` in `.env` to a valid token from [agentauth.radi.pro
 
 ### No Auth (Anonymous)
 
-Many tools work without authentication. Anonymous calls are rate-limited to **10 requests/min** and interaction reports submitted without auth receive reduced credibility weight.
+Many tools work without authentication. Anonymous calls are rate-limited to **10 requests/min** and interaction reports submitted without auth receive reduced credibility weight. **Exception:** `get_interaction_history` always requires a valid `access_token` with `trust.read` scope.
 
 ---
 
@@ -297,3 +303,4 @@ Many tools work without authentication. Anonymous calls are rate-limited to **10
 | Score doesn't change after reporting | arq worker not running | Start it: `uv run python scripts/run_worker.py` |
 | Attestation verification fails | Signing key mismatch | Ensure `SIGNING_KEY_PATH` points to the same key used to start the server |
 | Rate limit errors | Too many requests | Wait 60 seconds, or authenticate to get a higher limit |
+| `file_dispute` returns rate limit error | Agent filing too many disputes, or has ≥5 prior dismissed disputes | Wait for the 24h cooldown to expire, or use a different agent |

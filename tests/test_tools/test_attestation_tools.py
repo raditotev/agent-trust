@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import jwt
 import pytest
 
 from agent_trust.auth.identity import AgentIdentity

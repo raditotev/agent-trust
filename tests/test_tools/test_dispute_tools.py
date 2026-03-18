@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_trust.auth.identity import AgentIdentity, AuthenticationError, AuthorizationError
+from agent_trust.auth.identity import AgentIdentity
+from agent_trust.ratelimit import RateLimitResult
 from agent_trust.tools.disputes import file_dispute, resolve_dispute
 
 # ---------------------------------------------------------------------------
@@ -19,6 +20,10 @@ _COUNTERPARTY_ID = str(uuid.uuid4())
 _RESOLVER_ID = str(uuid.uuid4())
 _INTERACTION_ID = str(uuid.uuid4())
 _DISPUTE_ID = str(uuid.uuid4())
+
+_RATE_LIMIT_ALLOWED = RateLimitResult(
+    allowed=True, limit=60, remaining=59, reset_at=9_999_999_999
+)
 
 
 def _make_identity(
@@ -61,7 +66,10 @@ async def _fake_session_ctx(session_mock):
 
 
 def _make_session(*scalar_results):
-    """Return a session mock that cycles through scalar_results per execute call."""
+    """Return a session mock that cycles through scalar_results per execute call.
+    
+    Returns results via both .scalar() and .scalar_one_or_none() for compatibility.
+    """
     session = MagicMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
@@ -74,6 +82,7 @@ def _make_session(*scalar_results):
         call_count[0] += 1
         value = scalar_results[n] if n < len(scalar_results) else None
         result.scalar_one_or_none.return_value = value
+        result.scalar.return_value = value
         return result
 
     session.execute = execute
@@ -88,7 +97,8 @@ def _make_session(*scalar_results):
 @pytest.mark.asyncio
 async def test_file_dispute_success():
     interaction = _make_interaction()
-    session = _make_session(interaction, None)  # interaction found, no existing dispute
+    # Query sequence: dismissed_count, last_dismissed_at, interaction, existing_dispute
+    session = _make_session(0, None, interaction, None)
 
     provider = MagicMock()
     provider.authenticate = AsyncMock(return_value=_make_identity())
@@ -96,6 +106,7 @@ async def test_file_dispute_success():
     with (
         patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
+        patch("agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)),
     ):
         result = await file_dispute(
             interaction_id=_INTERACTION_ID,
@@ -130,7 +141,8 @@ async def test_file_dispute_requires_scope():
 async def test_file_dispute_not_a_party():
     other_id = str(uuid.uuid4())
     interaction = _make_interaction()  # initiator=_FILER_ID, counterparty=_COUNTERPARTY_ID
-    session = _make_session(interaction)
+    # Query sequence: dismissed_count, last_dismissed_at, interaction
+    session = _make_session(0, None, interaction)
 
     provider = MagicMock()
     # Authenticate as someone not party to the interaction
@@ -139,6 +151,7 @@ async def test_file_dispute_not_a_party():
     with (
         patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
+        patch("agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)),
     ):
         result = await file_dispute(
             interaction_id=_INTERACTION_ID,
@@ -152,7 +165,8 @@ async def test_file_dispute_not_a_party():
 
 @pytest.mark.asyncio
 async def test_file_dispute_interaction_not_found():
-    session = _make_session(None)  # interaction not found
+    # Query sequence: dismissed_count, last_dismissed_at, interaction (not found)
+    session = _make_session(0, None, None)
 
     provider = MagicMock()
     provider.authenticate = AsyncMock(return_value=_make_identity())
@@ -160,6 +174,7 @@ async def test_file_dispute_interaction_not_found():
     with (
         patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
+        patch("agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)),
     ):
         result = await file_dispute(
             interaction_id=_INTERACTION_ID,
@@ -175,7 +190,8 @@ async def test_file_dispute_interaction_not_found():
 async def test_file_dispute_duplicate_open():
     interaction = _make_interaction()
     existing_dispute = _make_dispute(status="open")
-    session = _make_session(interaction, existing_dispute)
+    # Query sequence: dismissed_count, last_dismissed_at, interaction, existing_dispute
+    session = _make_session(0, None, interaction, existing_dispute)
 
     provider = MagicMock()
     provider.authenticate = AsyncMock(return_value=_make_identity())
@@ -183,6 +199,7 @@ async def test_file_dispute_duplicate_open():
     with (
         patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
+        patch("agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)),
     ):
         result = await file_dispute(
             interaction_id=_INTERACTION_ID,

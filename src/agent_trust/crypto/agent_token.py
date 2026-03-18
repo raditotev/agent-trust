@@ -7,7 +7,6 @@ from typing import Any
 import jwt
 import structlog
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from agent_trust.auth.identity import AuthenticationError
 

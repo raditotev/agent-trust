@@ -78,7 +78,7 @@ AgentTrust MCP Server
 | Tool                      | Scope Required | Description                          |
 | ------------------------- | -------------- | ------------------------------------ |
 | `report_interaction`      | trust.report   | Submit an interaction report         |
-| `get_interaction_history` | none           | Get interaction history for an agent |
+| `get_interaction_history` | trust.read     | Get interaction history for an agent |
 
 ### Disputes
 
@@ -126,12 +126,16 @@ AgentTrust uses a **Bayesian Beta distribution** model:
 
 - **Prior**: α=2, β=2 → new agents start at 0.5 with low confidence
 - **Time decay**: `weight = 0.5 ^ (age_days / half_life_days)` (default half-life: 90 days)
-- **Reporter credibility**: `(0.5 + reporter_trust × 0.5) × trust_level_weight`
-- **Trust level weights**: root=1.2×, delegated=1.0×, standalone=0.8×, ephemeral=0.7×
-- **Mutual confirmation bonus**: 1.5× weight multiplier
+- **Reporter credibility**: `(0.5 + reporter_trust × 0.5) × trust_level_weight × sybil_multiplier × interaction_count_penalty`
+- **Trust level weights**: root=1.2×, delegated=1.0×, standalone=0.8×, ephemeral=0.7× — derived from `auth_source`/`agentauth_linked`, never from user-supplied metadata
+- **Sybil multiplier**: 0.3× (high risk), 0.6× (suspicious), 1.0× (clean) — via `SybilDetector`
+- **New-reporter gate**: `interaction_count_penalty = 0.3` for reporters with < 3 recorded interactions
+- **Mutual confirmation bonus**: `max(1.5 - 0.1 × (pair_count - 1), 1.0)` — diminishing returns per pair (1st: 1.5×, 6th+: 1.0×)
 - **Upheld dispute penalty**: `max(1.0 - n_upheld × 0.03, 0.50)` (floor: 0.50)
-- **Dismissed dispute penalty** (filer): `max(1.0 - n_dismissed × 0.01, 0.90)` (floor: 0.90)
+- **Dismissed dispute penalty** (filer): exponential `max(1.0 - Σ(0.01 × 1.5ⁱ), 0.90)` — floor reached at ~5–6 dismissals
 - **Confidence**: `1.0 - 1.0 / (1.0 + n × 0.1)`
+
+**For a detailed walkthrough including role-aware scoring, Sybil detection, and worked examples, see [docs/interaction-scoring.md](docs/interaction-scoring.md).**
 
 ## Environment Variables
 
@@ -145,7 +149,7 @@ AgentTrust uses a **Bayesian Beta distribution** model:
 | `AGENTAUTH_ACCESS_TOKEN` | —                                | Bearer token for AgentAuth MCP calls                    |
 | `SCORE_HALF_LIFE_DAYS`   | `90`                             | Score decay half-life in days                           |
 | `DISPUTE_PENALTY`        | `0.03`                           | Per-upheld-dispute score penalty                        |
-| `ATTESTATION_TTL_HOURS`  | `24`                             | Default attestation validity period                     |
+| `ATTESTATION_TTL_HOURS`  | `12`                             | Default attestation validity period                     |
 | `MCP_TRANSPORT`          | `stdio`                          | `stdio` \| `streamable-http`                            |
 | `MCP_PORT`               | `8000`                           | Port for streamable-http transport                      |
 | `LOG_LEVEL`              | `INFO`                           | Logging level                                           |

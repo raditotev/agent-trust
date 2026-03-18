@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from agent_trust.auth.identity import AuthenticationError, AuthorizationError
 from agent_trust.auth.provider import require_scope
@@ -83,6 +83,21 @@ async def report_interaction(
     if outcome not in VALID_OUTCOMES:
         return {"error": f"Invalid outcome. Must be one of: {sorted(VALID_OUTCOMES)}"}
 
+    # Change 3 — Fix #12: Context and evidence_hash size/format validation
+    import json as _json
+    if context is not None:
+        try:
+            context_size = len(_json.dumps(context).encode("utf-8"))
+        except (TypeError, ValueError):
+            return {"error": "context must be a JSON-serializable object"}
+        if context_size > 10240:
+            return {"error": f"context payload too large: {context_size} bytes (max 10240)"}
+
+    if evidence_hash is not None:
+        import re
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", evidence_hash):
+            return {"error": "evidence_hash must be a valid SHA-256 hex string (64 hex characters)"}
+
     try:
         reporter_uuid = uuid.UUID(identity.agent_id)
         counterparty_uuid = uuid.UUID(counterparty_id)
@@ -108,6 +123,49 @@ async def report_interaction(
         counterparty_agent = counterparty_result.scalar_one_or_none()
         if not counterparty_agent:
             return {"error": f"Counterparty agent not found (id={counterparty_id})"}
+
+        # Change 1 — Fix #7: Per-pair daily interaction cap
+        pair_cutoff = datetime.now(UTC) - timedelta(hours=24)
+        pair_count_result = await session.execute(
+            select(func.count()).select_from(Interaction).where(
+                Interaction.reported_at >= pair_cutoff,
+                (
+                    (Interaction.initiator_id == reporter_uuid)
+                    & (Interaction.counterparty_id == counterparty_uuid)
+                )
+                | (
+                    (Interaction.initiator_id == counterparty_uuid)
+                    & (Interaction.counterparty_id == reporter_uuid)
+                ),
+            )
+        )
+        pair_count = pair_count_result.scalar() or 0
+        if pair_count >= 10:
+            return {
+                "error": (
+                    "Per-pair daily limit reached: maximum 10 interactions "
+                    "per agent pair per 24 hours"
+                ),
+                "pair_interaction_count": pair_count,
+            }
+
+        # Change 2 — Fix #10: Duplicate interaction deduplication window
+        dedup_cutoff = datetime.now(UTC) - timedelta(hours=1)
+        dedup_result = await session.execute(
+            select(Interaction).where(
+                Interaction.reported_by == reporter_uuid,
+                Interaction.counterparty_id == counterparty_uuid,
+                Interaction.interaction_type == interaction_type,
+                Interaction.reported_at >= dedup_cutoff,
+            )
+        )
+        if dedup_result.scalar_one_or_none():
+            return {
+                "error": (
+                    "Duplicate interaction: same interaction type with this "
+                    "counterparty already reported within the last hour"
+                )
+            }
 
         # Check if counterparty already reported this interaction (for mutual confirmation)
         existing_result = await session.execute(
@@ -198,14 +256,28 @@ async def get_interaction_history(
     with timestamps, counterparty IDs, and outcomes. Useful for due
     diligence before high-value transactions.
 
-    Authentication is optional — unauthenticated calls return public
-    interaction summaries. Authenticated callers get full detail.
+    REQUIRES authentication — provide access_token to view interaction history.
 
     since_days: how far back to look (default 90, max 365)
     limit: max results to return (default 50, max 200)
     """
     since_days = min(max(1, since_days), 365)
     limit = min(max(1, limit), 200)
+
+    # Change 4 — Fix #13: Require authentication for get_interaction_history
+    if not access_token:
+        return {
+            "error": (
+                "Authentication required: provide access_token to view "
+                "interaction history"
+            )
+        }
+
+    try:
+        from agent_trust.auth.resolve import resolve_identity
+        await resolve_identity(access_token=access_token)
+    except Exception as e:
+        return {"error": f"Authentication failed: {e}"}
 
     try:
         target_uuid = uuid.UUID(agent_id)

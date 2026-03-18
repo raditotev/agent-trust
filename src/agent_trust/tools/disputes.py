@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from agent_trust.auth.agentauth import AgentAuthProvider
 from agent_trust.auth.identity import AuthenticationError, AuthorizationError
@@ -50,6 +50,19 @@ async def file_dispute(
     except (AuthenticationError, AuthorizationError) as e:
         return {"error": str(e)}
 
+    from agent_trust.ratelimit import check_rate_limit
+
+    rl_result = await check_rate_limit(
+        agent_id=identity.agent_id,
+        tool_name="file_dispute",
+        trust_level=identity.trust_level,
+    )
+    if not rl_result.allowed:
+        return {
+            "error": "Rate limit exceeded",
+            "retry_after_seconds": rl_result.retry_after,
+        }
+
     try:
         interaction_uuid = uuid.UUID(interaction_id)
         filer_uuid = uuid.UUID(identity.agent_id)
@@ -57,6 +70,51 @@ async def file_dispute(
         return {"error": f"Invalid UUID: {e}"}
 
     async with get_session() as session:
+        # Block agents who have filed 5 or more previously dismissed disputes
+        dismissed_count_result = await session.execute(
+            select(func.count())
+            .select_from(Dispute)
+            .where(
+                Dispute.filed_by == filer_uuid,
+                Dispute.status == "resolved",
+                Dispute.resolution == "dismissed",
+            )
+        )
+        dismissed_count = dismissed_count_result.scalar() or 0
+        if dismissed_count >= 5:
+            return {
+                "error": (
+                    "Dispute filing blocked: you have 5 or more previously dismissed disputes. "
+                    "Contact an administrator to restore dispute filing privileges."
+                ),
+                "dismissed_dispute_count": dismissed_count,
+            }
+
+        # 24-hour cooldown after a dismissed dispute
+        recent_dismissed_result = await session.execute(
+            select(Dispute.created_at)
+            .where(
+                Dispute.filed_by == filer_uuid,
+                Dispute.status == "resolved",
+                Dispute.resolution == "dismissed",
+            )
+            .order_by(Dispute.created_at.desc())
+            .limit(1)
+        )
+        last_dismissed_at = recent_dismissed_result.scalar_one_or_none()
+        if last_dismissed_at is not None:
+            cooldown_ends = last_dismissed_at + timedelta(hours=24)
+            if datetime.now(UTC) < cooldown_ends:
+                retry_in = int((cooldown_ends - datetime.now(UTC)).total_seconds())
+                return {
+                    "error": (
+                        "Cooldown active: you must wait 24 hours after a dismissed dispute "
+                        "before filing again."
+                    ),
+                    "cooldown_ends_at": cooldown_ends.isoformat(),
+                    "retry_after_seconds": retry_in,
+                }
+
         ix_result = await session.execute(
             select(Interaction).where(Interaction.interaction_id == interaction_uuid)
         )

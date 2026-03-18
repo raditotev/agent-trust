@@ -44,13 +44,13 @@ async def test_subscribe_alerts_success():
 
         result = await subscribe_alerts(
             watched_agent_id=watched_id,
-            callback_tool="handle_trust_alert",
+            callback_tool="notify_agent",
             access_token="mock-token",
             threshold_delta=0.1,
         )
 
     assert "error" not in result
-    assert result["callback_tool"] == "handle_trust_alert"
+    assert result["callback_tool"] == "notify_agent"
     assert result["threshold_delta"] == 0.1
     assert result["watched_agent_id"] == watched_id
     assert result["created"] is True
@@ -97,15 +97,15 @@ async def test_subscribe_alerts_upsert_existing():
 
         result = await subscribe_alerts(
             watched_agent_id=watched_id,
-            callback_tool="new_tool",
+            callback_tool="notify_agent",
             access_token="mock-token",
             threshold_delta=0.2,
         )
 
     assert "error" not in result
     assert result["created"] is False
-    assert result["callback_tool"] == "new_tool"
-    assert existing_sub.callback_tool == "new_tool"
+    assert result["callback_tool"] == "notify_agent"
+    assert existing_sub.callback_tool == "notify_agent"
     assert existing_sub.threshold_delta == 0.2
 
 
@@ -130,7 +130,7 @@ async def test_subscribe_alerts_requires_admin_scope():
 
         result = await subscribe_alerts(
             watched_agent_id=str(uuid.uuid4()),
-            callback_tool="handle_trust_alert",
+            callback_tool="notify_agent",
             access_token="mock-token",
         )
 
@@ -169,7 +169,7 @@ async def test_subscribe_alerts_watched_not_found():
 
         result = await subscribe_alerts(
             watched_agent_id=str(uuid.uuid4()),
-            callback_tool="handle_alert",
+            callback_tool="alert_handler",
             access_token="mock-token",
         )
 
@@ -214,7 +214,7 @@ async def test_subscribe_alerts_threshold_clamping():
         # threshold_delta=0.0 should be clamped to 0.01
         result = await subscribe_alerts(
             watched_agent_id=watched_id,
-            callback_tool="handle_trust_alert",
+            callback_tool="notify_agent",
             access_token="mock-token",
             threshold_delta=0.0,
         )
@@ -269,7 +269,7 @@ async def test_dispatch_alerts_dispatches_when_threshold_exceeded():
 
     sub = MagicMock()
     sub.threshold_delta = 0.05
-    sub.callback_tool = "handle_trust_alert"
+    sub.callback_tool = "notify_agent"
     sub.subscriber_id = uuid.uuid4()
 
     mock_scalars = MagicMock()
@@ -300,7 +300,7 @@ async def test_dispatch_alerts_skips_below_threshold():
 
     sub = MagicMock()
     sub.threshold_delta = 0.20  # high threshold
-    sub.callback_tool = "handle_trust_alert"
+    sub.callback_tool = "notify_agent"
     sub.subscriber_id = uuid.uuid4()
 
     mock_scalars = MagicMock()

@@ -103,9 +103,7 @@ def _make_orm_score(agent_id: uuid.UUID, score_type: str = "overall") -> MagicMo
     return s
 
 
-def _make_orm_interaction(
-    initiator_id: uuid.UUID, counterparty_id: uuid.UUID
-) -> MagicMock:
+def _make_orm_interaction(initiator_id: uuid.UUID, counterparty_id: uuid.UUID) -> MagicMock:
     i = MagicMock()
     i.interaction_id = uuid.uuid4()
     i.initiator_id = initiator_id
@@ -231,9 +229,7 @@ class TestRegisterAgentMCP:
             "agent_trust.tools.agents._ensure_agent_profile",
             new=AsyncMock(return_value=(agent, True)),
         ):
-            r = await mcp_session.call_tool(
-                "register_agent", {"public_key_hex": "ab" * 32}
-            )
+            r = await mcp_session.call_tool("register_agent", {"public_key_hex": "ab" * 32})
 
         assert not r.isError
         data = _parse(r)
@@ -257,9 +253,7 @@ class TestRegisterAgentMCP:
                 new=AsyncMock(return_value=(agent, True)),
             ),
         ):
-            r = await mcp_session.call_tool(
-                "register_agent", {"access_token": "valid-token"}
-            )
+            r = await mcp_session.call_tool("register_agent", {"access_token": "valid-token"})
 
         assert not r.isError
         data = _parse(r)
@@ -282,9 +276,7 @@ class TestRegisterAgentMCP:
                 new=AsyncMock(return_value=(agent, False)),
             ),
         ):
-            r = await mcp_session.call_tool(
-                "register_agent", {"access_token": "existing-token"}
-            )
+            r = await mcp_session.call_tool("register_agent", {"access_token": "existing-token"})
 
         assert not r.isError
         data = _parse(r)
@@ -293,9 +285,7 @@ class TestRegisterAgentMCP:
     @pytest.mark.asyncio
     async def test_invalid_public_key_hex(self, mcp_session):
         """Malformed hex string raises AuthenticationError → MCP isError=True."""
-        r = await mcp_session.call_tool(
-            "register_agent", {"public_key_hex": "not-valid-hex!!"}
-        )
+        r = await mcp_session.call_tool("register_agent", {"public_key_hex": "not-valid-hex!!"})
         assert r.isError
         assert "Invalid public_key_hex" in r.content[0].text
 
@@ -437,8 +427,6 @@ class TestGenerateAgentTokenMCP:
         for report_interaction (the primary use-case for returning agents)."""
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-        from tests.test_integration.conftest import make_standalone_identity
-
         private_key = Ed25519PrivateKey.generate()
         agent_id = str(uuid.uuid4())
 
@@ -456,7 +444,8 @@ class TestGenerateAgentTokenMCP:
 
         reporter_agent = _make_orm_agent(uuid.UUID(reporter_id))
         counterparty_agent = _make_orm_agent(uuid.UUID(counterparty_id))
-        session_ctx = make_session_ctx(reporter_agent, counterparty_agent, None)
+        # report_interaction queries: reporter_agent, counterparty_agent, pair_count, dedup_result, counterparty_report
+        session_ctx = make_session_ctx(reporter_agent, counterparty_agent, 0, None, None)
 
         with (
             patch(
@@ -465,7 +454,7 @@ class TestGenerateAgentTokenMCP:
             ),
             patch(
                 "agent_trust.tools.interactions.get_session",
-                return_value=session_ctx(),
+                session_ctx,
             ),
             patch(
                 "agent_trust.tools.interactions._enqueue_score_recomputation",
@@ -610,9 +599,7 @@ class TestGetAgentProfileMCP:
         score = _make_orm_score(agent.agent_id)
         session_ctx = make_session_ctx(agent, [score])
         with patch("agent_trust.tools.agents.get_session", session_ctx):
-            r = await mcp_session.call_tool(
-                "get_agent_profile", {"agent_id": str(agent.agent_id)}
-            )
+            r = await mcp_session.call_tool("get_agent_profile", {"agent_id": str(agent.agent_id)})
 
         assert not r.isError
         data = _parse(r)
@@ -624,9 +611,7 @@ class TestGetAgentProfileMCP:
     async def test_profile_not_found(self, mcp_session):
         session_ctx = make_session_ctx(None, [])
         with patch("agent_trust.tools.agents.get_session", session_ctx):
-            r = await mcp_session.call_tool(
-                "get_agent_profile", {"agent_id": str(uuid.uuid4())}
-            )
+            r = await mcp_session.call_tool("get_agent_profile", {"agent_id": str(uuid.uuid4())})
 
         assert not r.isError
         data = _parse(r)
@@ -790,7 +775,9 @@ class TestReportInteractionMCP:
         from agent_trust.ratelimit import RateLimitResult
 
         identity = make_identity()
-        denied = RateLimitResult(allowed=False, limit=10, remaining=0, reset_at=9999, retry_after=30)
+        denied = RateLimitResult(
+            allowed=False, limit=10, remaining=0, reset_at=9999, retry_after=30
+        )
         with (
             patch(
                 "agent_trust.tools.interactions._resolve_identity_for_interaction",
@@ -825,9 +812,14 @@ class TestReportInteractionMCP:
 class TestGetInteractionHistoryMCP:
     @pytest.mark.asyncio
     async def test_invalid_uuid(self, mcp_session):
-        r = await mcp_session.call_tool(
-            "get_interaction_history", {"agent_id": "not-a-uuid"}
-        )
+        identity = make_identity(scopes=["trust.read"])
+        with patch(
+            "agent_trust.auth.resolve.resolve_identity",
+            new=AsyncMock(return_value=identity),
+        ):
+            r = await mcp_session.call_tool(
+                "get_interaction_history", {"agent_id": "not-a-uuid", "access_token": "valid-tok"}
+            )
         assert not r.isError
         data = _parse(r)
         assert "error" in data
@@ -835,10 +827,18 @@ class TestGetInteractionHistoryMCP:
 
     @pytest.mark.asyncio
     async def test_agent_not_found(self, mcp_session):
+        identity = make_identity(scopes=["trust.read"])
         session_ctx = make_session_ctx(None)
-        with patch("agent_trust.tools.interactions.get_session", session_ctx):
+        with (
+            patch(
+                "agent_trust.auth.resolve.resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
+            patch("agent_trust.tools.interactions.get_session", session_ctx),
+        ):
             r = await mcp_session.call_tool(
-                "get_interaction_history", {"agent_id": str(uuid.uuid4())}
+                "get_interaction_history",
+                {"agent_id": str(uuid.uuid4()), "access_token": "valid-tok"},
             )
 
         assert not r.isError
@@ -848,13 +848,20 @@ class TestGetInteractionHistoryMCP:
 
     @pytest.mark.asyncio
     async def test_success_returns_list(self, mcp_session):
+        identity = make_identity(scopes=["trust.read"])
         agent_id = uuid.uuid4()
         agent = _make_orm_agent(agent_id)
         ix = _make_orm_interaction(agent_id, uuid.uuid4())
         session_ctx = make_session_ctx(agent, [ix])
-        with patch("agent_trust.tools.interactions.get_session", session_ctx):
+        with (
+            patch(
+                "agent_trust.auth.resolve.resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
+            patch("agent_trust.tools.interactions.get_session", session_ctx),
+        ):
             r = await mcp_session.call_tool(
-                "get_interaction_history", {"agent_id": str(agent_id)}
+                "get_interaction_history", {"agent_id": str(agent_id), "access_token": "valid-tok"}
             )
 
         assert not r.isError
@@ -911,7 +918,8 @@ class TestFileDisputeMCP:
     @pytest.mark.asyncio
     async def test_interaction_not_found(self, mcp_session):
         identity = make_identity(scopes=["trust.read", "trust.report", "trust.dispute.file"])
-        session_ctx = make_session_ctx(None)  # interaction lookup returns None
+        # file_dispute queries: dismissed_count, last_dismissed_at, interaction (not found)
+        session_ctx = make_session_ctx(0, None, None)
         with (
             patch("agent_trust.db.redis.get_redis", new=AsyncMock(return_value=make_mock_redis())),
             patch(
@@ -919,6 +927,10 @@ class TestFileDisputeMCP:
                 new=AsyncMock(return_value=identity),
             ),
             patch("agent_trust.tools.disputes.get_session", session_ctx),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+            ),
         ):
             r = await mcp_session.call_tool(
                 "file_dispute",
@@ -939,7 +951,8 @@ class TestFileDisputeMCP:
         """Filer is not initiator or counterparty → error."""
         identity = make_identity(scopes=["trust.read", "trust.report", "trust.dispute.file"])
         ix = _make_orm_interaction(uuid.uuid4(), uuid.uuid4())  # stranger IDs
-        session_ctx = make_session_ctx(ix)
+        # file_dispute queries: dismissed_count, last_dismissed_at, interaction
+        session_ctx = make_session_ctx(0, None, ix)
         with (
             patch("agent_trust.db.redis.get_redis", new=AsyncMock(return_value=make_mock_redis())),
             patch(
@@ -947,6 +960,10 @@ class TestFileDisputeMCP:
                 new=AsyncMock(return_value=identity),
             ),
             patch("agent_trust.tools.disputes.get_session", session_ctx),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+            ),
         ):
             r = await mcp_session.call_tool(
                 "file_dispute",
@@ -1095,9 +1112,7 @@ class TestCheckTrustMCP:
             ),
             patch("agent_trust.tools.scoring.get_session", session_ctx),
         ):
-            r = await mcp_session.call_tool(
-                "check_trust", {"agent_id": str(uuid.uuid4())}
-            )
+            r = await mcp_session.call_tool("check_trust", {"agent_id": str(uuid.uuid4())})
 
         assert not r.isError
         data = _parse(r)
@@ -1118,9 +1133,7 @@ class TestCheckTrustMCP:
             ),
             patch("agent_trust.tools.scoring.get_session", session_ctx),
         ):
-            r = await mcp_session.call_tool(
-                "check_trust", {"agent_id": str(agent.agent_id)}
-            )
+            r = await mcp_session.call_tool("check_trust", {"agent_id": str(agent.agent_id)})
 
         assert not r.isError
         data = _parse(r)
@@ -1288,9 +1301,7 @@ class TestIssueAttestationMCP:
 
     @pytest.mark.asyncio
     async def test_agent_not_found(self, mcp_session):
-        identity = make_identity(
-            scopes=["trust.read", "trust.report", "trust.attest.issue"]
-        )
+        identity = make_identity(scopes=["trust.read", "trust.report", "trust.attest.issue"])
         session_ctx = make_session_ctx(None)
         with (
             patch("agent_trust.db.redis.get_redis", new=AsyncMock(return_value=make_mock_redis())),
@@ -1493,9 +1504,7 @@ class TestResourcesMCP:
         score = _make_orm_score(agent.agent_id)
         session_ctx = make_session_ctx(agent, [score])
         with patch("agent_trust.db.session.get_session", session_ctx):
-            result = await mcp_session.read_resource(
-                f"trust://agents/{agent.agent_id}/score"
-            )
+            result = await mcp_session.read_resource(f"trust://agents/{agent.agent_id}/score")
 
         assert result.contents
         data = json.loads(result.contents[0].text)
@@ -1575,9 +1584,7 @@ class TestPromptsMCP:
     @pytest.mark.asyncio
     async def test_explain_score_change_prompt(self, mcp_session):
         agent_id = str(uuid.uuid4())
-        result = await mcp_session.get_prompt(
-            "explain_score_change_prompt", {"agent_id": agent_id}
-        )
+        result = await mcp_session.get_prompt("explain_score_change_prompt", {"agent_id": agent_id})
         assert result.messages
         text = result.messages[0].content.text
         assert agent_id in text

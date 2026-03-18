@@ -74,6 +74,39 @@ async def recompute_score(ctx: dict, agent_id: str) -> dict:
                     error=str(e),
                 )
 
+        # Proactive attestation revocation on significant score drop
+        try:
+            new_overall_score = updated_scores.get("overall")
+            if old_overall is not None and new_overall_score is not None:
+                score_drop = old_overall - new_overall_score
+                if score_drop > 0.10:
+                    from datetime import UTC, datetime
+
+                    from agent_trust.models.attestation import Attestation
+
+                    now = datetime.now(UTC)
+                    attest_result = await session.execute(
+                        select(Attestation).where(
+                            Attestation.subject_id == agent_uuid,
+                            ~Attestation.revoked,
+                            Attestation.valid_until > now,
+                        )
+                    )
+                    attestations_to_revoke = attest_result.scalars().all()
+                    revoked_count = 0
+                    for attest in attestations_to_revoke:
+                        attest.revoked = True
+                        revoked_count += 1
+                    if revoked_count > 0:
+                        log.info(
+                            "attestations_proactively_revoked",
+                            agent_id=agent_id,
+                            revoked_count=revoked_count,
+                            score_drop=round(score_drop, 4),
+                        )
+        except Exception as e:
+            log.warning("attestation_revocation_failed", error=str(e))
+
     try:
         redis = await get_redis()
         for score_type in SCORE_TYPES:

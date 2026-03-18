@@ -20,6 +20,7 @@ import pytest
 
 from agent_trust.engine.score_engine import ScoreComputation
 from agent_trust.models import TrustScore
+from agent_trust.ratelimit import RateLimitResult
 from tests.factories import make_interaction
 
 # New agents start at α=2, β=2 → score = 0.5 with zero interactions
@@ -45,12 +46,12 @@ async def _compute(
       - _get_auth_trust_level → "delegated"  (weight = 1.0)
       - _count_lost_disputes  → lost_disputes (0 unless specified)
       - _count_dismissed_*    → 0
+      - _get_reporter_interaction_count → 10 (above threshold)
+      - _count_mutual_pair_confirmations → 0 (no mutual confirmations)
     """
     engine = ScoreComputation()
     relevant = [
-        ix
-        for ix in interactions
-        if ix.initiator_id == agent_id or ix.counterparty_id == agent_id
+        ix for ix in interactions if ix.initiator_id == agent_id or ix.counterparty_id == agent_id
     ]
     with (
         patch.object(engine, "_fetch_interactions", new=AsyncMock(return_value=relevant)),
@@ -61,6 +62,20 @@ async def _compute(
             engine,
             "_count_dismissed_disputes_filed_by",
             new=AsyncMock(return_value=0),
+        ),
+        patch.object(
+            engine,
+            "_get_reporter_interaction_count",
+            new=AsyncMock(return_value=10),
+        ),
+        patch.object(
+            engine,
+            "_count_mutual_pair_confirmations",
+            new=AsyncMock(return_value=0),
+        ),
+        patch(
+            "agent_trust.engine.score_engine.get_sybil_credibility_multiplier",
+            new=AsyncMock(return_value=1.0),
         ),
     ):
         return await engine.compute(agent_id, "overall", AsyncMock())
@@ -99,7 +114,7 @@ class TestSuccessOutcome:
     @pytest.mark.asyncio
     async def test_both_scores_increase_asymmetrically(self):
         """Reporter gets half credit, counterparty gets full credit from success.
-        
+
         Role-aware: reporter (α += w×0.5), counterparty (α += w).
         Both scores increase above prior, but counterparty score is higher.
         """
@@ -135,7 +150,7 @@ class TestFailureOutcome:
     @pytest.mark.asyncio
     async def test_reporter_score_unchanged(self):
         """Reporter is not penalized for reporting failure — score stays at prior.
-        
+
         Role-aware: only counterparty gets β += w, reporter unchanged.
         """
         reporter_id = uuid.uuid4()
@@ -149,7 +164,7 @@ class TestFailureOutcome:
     @pytest.mark.asyncio
     async def test_scores_diverge_asymmetrically(self):
         """Reporter stays at prior, counterparty drops — role-aware asymmetry.
-        
+
         Role-aware: reporter unchanged, counterparty penalized (β += w).
         """
         reporter_id = uuid.uuid4()
@@ -198,7 +213,7 @@ class TestTimeoutOutcome:
     @pytest.mark.asyncio
     async def test_reporter_score_unchanged(self):
         """Reporter is not penalized for reporting timeout — score stays at prior.
-        
+
         Role-aware: only counterparty gets β += w, reporter unchanged.
         """
         reporter_id = uuid.uuid4()
@@ -244,7 +259,7 @@ class TestPartialOutcome:
     @pytest.mark.asyncio
     async def test_reporter_score_increases_slightly(self):
         """Reporter gets small credit for partial — score rises slightly above prior.
-        
+
         Role-aware: reporter gets α += w×0.25, no β change.
         With α=2, β=2, weight=0.6: α becomes 2.15, score = 2.15/4.15 ≈ 0.518.
         """
@@ -308,7 +323,9 @@ class TestMutualConfirmation:
         reporter_id = uuid.uuid4()
         cp_id = uuid.uuid4()
 
-        unconfirmed = make_interaction(reporter_id, cp_id, outcome="success", mutually_confirmed=False)
+        unconfirmed = make_interaction(
+            reporter_id, cp_id, outcome="success", mutually_confirmed=False
+        )
         confirmed = make_interaction(reporter_id, cp_id, outcome="success", mutually_confirmed=True)
 
         unconfirmed_score = await _compute(cp_id, [unconfirmed])
@@ -322,7 +339,9 @@ class TestMutualConfirmation:
         reporter_id = uuid.uuid4()
         cp_id = uuid.uuid4()
 
-        unconfirmed = make_interaction(reporter_id, cp_id, outcome="failure", mutually_confirmed=False)
+        unconfirmed = make_interaction(
+            reporter_id, cp_id, outcome="failure", mutually_confirmed=False
+        )
         confirmed = make_interaction(reporter_id, cp_id, outcome="failure", mutually_confirmed=True)
 
         unconfirmed_score = await _compute(cp_id, [unconfirmed])
@@ -465,12 +484,28 @@ class TestCheckTrustFreshComputation:
         with (
             patch.object(real_engine, "_fetch_interactions", new=AsyncMock(return_value=[ix])),
             patch.object(real_engine, "_get_cached_score", new=AsyncMock(return_value=0.5)),
-            patch.object(real_engine, "_get_auth_trust_level", new=AsyncMock(return_value="delegated")),
+            patch.object(
+                real_engine, "_get_auth_trust_level", new=AsyncMock(return_value="delegated")
+            ),
             patch.object(real_engine, "_count_lost_disputes", new=AsyncMock(return_value=0)),
             patch.object(
                 real_engine,
                 "_count_dismissed_disputes_filed_by",
                 new=AsyncMock(return_value=0),
+            ),
+            patch.object(
+                real_engine,
+                "_get_reporter_interaction_count",
+                new=AsyncMock(return_value=10),
+            ),
+            patch.object(
+                real_engine,
+                "_count_mutual_pair_confirmations",
+                new=AsyncMock(return_value=0),
+            ),
+            patch(
+                "agent_trust.engine.score_engine.get_sybil_credibility_multiplier",
+                new=AsyncMock(return_value=1.0),
             ),
         ):
 
@@ -481,6 +516,7 @@ class TestCheckTrustFreshComputation:
                 async def execute(*args, **kwargs):
                     r = MagicMock()
                     r.scalar_one_or_none.return_value = mock_agent
+                    r.scalar.return_value = 0  # For sybil detector burst count queries
                     return r
 
                 session.execute = execute
@@ -492,9 +528,19 @@ class TestCheckTrustFreshComputation:
 
             with (
                 patch("agent_trust.tools.scoring.get_session", side_effect=fake_session),
-                patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
+                patch(
+                    "agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)
+                ),
                 patch("agent_trust.tools.scoring.ScoreComputation", return_value=real_engine),
                 patch("agent_trust.tools.scoring.upsert_trust_score", new=AsyncMock()),
+                patch(
+                    "agent_trust.ratelimit.check_rate_limit",
+                    new=AsyncMock(
+                        return_value=RateLimitResult(
+                            allowed=True, limit=60, remaining=59, reset_at=9_999_999_999
+                        )
+                    ),
+                ),
             ):
                 result = await check_trust(agent_id=agent_id_str)
 
@@ -545,6 +591,14 @@ class TestCheckTrustFreshComputation:
         with (
             patch("agent_trust.tools.scoring.get_session", side_effect=fake_session),
             patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                new=AsyncMock(
+                    return_value=RateLimitResult(
+                        allowed=True, limit=60, remaining=59, reset_at=9_999_999_999
+                    )
+                ),
+            ),
         ):
             result = await check_trust(agent_id=str(agent_uuid))
 
@@ -565,7 +619,7 @@ class TestRoleAwareScoring:
     @pytest.mark.asyncio
     async def test_reporter_not_penalized_for_failure(self):
         """Reporter reports failure but their score stays at prior (no penalty).
-        
+
         Role-aware: only counterparty is penalized for failure, not the reporter.
         """
         reporter_id = uuid.uuid4()
@@ -582,7 +636,7 @@ class TestRoleAwareScoring:
     @pytest.mark.asyncio
     async def test_reporter_not_penalized_for_timeout(self):
         """Reporter reports timeout but their score stays at prior (no penalty).
-        
+
         Role-aware: timeout treated like failure — only counterparty penalized.
         """
         reporter_id = uuid.uuid4()
@@ -598,7 +652,7 @@ class TestRoleAwareScoring:
     @pytest.mark.asyncio
     async def test_reporter_gets_half_credit_for_success(self):
         """Reporter gets half credit (α += w×0.5), counterparty gets full (α += w).
-        
+
         Role-aware: success benefits both, but counterparty more than reporter.
         """
         reporter_id = uuid.uuid4()
@@ -615,7 +669,7 @@ class TestRoleAwareScoring:
     @pytest.mark.asyncio
     async def test_reporter_gets_small_credit_for_partial(self):
         """Reporter gets α += w×0.25 for partial, slightly above prior.
-        
+
         Role-aware: reporter gets small participation credit, counterparty stays neutral.
         """
         reporter_id = uuid.uuid4()
@@ -632,12 +686,12 @@ class TestRoleAwareScoring:
     @pytest.mark.asyncio
     async def test_counterparty_fully_penalized_for_failure(self):
         """Counterparty receives full penalty (β += w) for failure while reporter unchanged.
-        
+
         Role-aware: failure scoring is asymmetric — only the counterparty is blamed.
         """
         reporter_id = uuid.uuid4()
         cp_id = uuid.uuid4()
-        
+
         success_ix = make_interaction(reporter_id, cp_id, outcome="success")
         failure_ix = make_interaction(reporter_id, cp_id, outcome="failure")
 
@@ -647,7 +701,7 @@ class TestRoleAwareScoring:
 
         assert success_score.score > PRIOR_SCORE
         assert failure_score.score < PRIOR_SCORE
-        
+
         # Reporter: success raises score (half credit), failure unchanged
         reporter_success = await _compute(reporter_id, [success_ix])
         reporter_failure = await _compute(reporter_id, [failure_ix])
@@ -658,7 +712,7 @@ class TestRoleAwareScoring:
     @pytest.mark.asyncio
     async def test_role_reversal_changes_scoring(self):
         """When roles are reversed, the scoring asymmetry flips.
-        
+
         Agent A reports failure of B: A unchanged, B penalized.
         Agent B reports failure of A: B unchanged, A penalized.
         """
@@ -667,7 +721,7 @@ class TestRoleAwareScoring:
 
         # A reports failure of B
         ix1 = make_interaction(agent_a, agent_b, outcome="failure", reported_by=agent_a)
-        
+
         # B reports failure of A (role reversed)
         ix2 = make_interaction(agent_b, agent_a, outcome="failure", reported_by=agent_b)
 

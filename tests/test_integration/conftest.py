@@ -15,9 +15,7 @@ from agent_trust.ratelimit import RateLimitResult
 # Constants
 # ---------------------------------------------------------------------------
 
-RATE_LIMIT_ALLOWED = RateLimitResult(
-    allowed=True, limit=60, remaining=59, reset_at=9_999_999_999
-)
+RATE_LIMIT_ALLOWED = RateLimitResult(allowed=True, limit=60, remaining=59, reset_at=9_999_999_999)
 
 ALL_SCOPES = [
     "trust.read",
@@ -113,12 +111,15 @@ def make_session_ctx(*execute_results):
                     mock_result.all.return_value = val
                     mock_result.scalars.return_value.all.return_value = [r[0] for r in val]
                     mock_result.scalar_one_or_none.return_value = val[0][0] if val else None
+                    mock_result.scalar.return_value = val[0][0] if val else None
                 else:
                     mock_result.all.return_value = val
                     mock_result.scalars.return_value.all.return_value = val
                     mock_result.scalar_one_or_none.return_value = val[0] if val else None
+                    mock_result.scalar.return_value = val[0] if val else None
             else:
                 mock_result.scalar_one_or_none.return_value = val
+                mock_result.scalar.return_value = val
                 mock_result.scalars.return_value.all.return_value = [val] if val is not None else []
                 mock_result.all.return_value = [(val, None)] if val is not None else []
 

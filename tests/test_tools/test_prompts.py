@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from agent_trust.prompts.diagnose import dispute_assessment, explain_score_change
 from agent_trust.prompts.evaluate import evaluate_counterparty
-from agent_trust.prompts.diagnose import explain_score_change, dispute_assessment
 
 
 def test_evaluate_counterparty_contains_agent_id():

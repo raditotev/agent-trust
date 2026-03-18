@@ -27,7 +27,7 @@ log = structlog.get_logger()
 async def issue_attestation(
     agent_id: str,
     access_token: str,
-    ttl_hours: int | None = None,
+    ttl_hours: int | None = 12,
 ) -> dict:
     """Issue a signed attestation (JWT) capturing an agent's current trust scores.
 
@@ -56,7 +56,7 @@ async def issue_attestation(
         return {"error": str(e)}
 
     ttl = ttl_hours if ttl_hours is not None else settings.attestation_ttl_hours
-    ttl = min(max(1, ttl), 720)  # clamp: 1 hour to 30 days
+    ttl = min(max(1, ttl), 72)  # clamp: 1 hour to 3 days
 
     try:
         subject_uuid = uuid.UUID(agent_id)

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_trust.auth.identity import AgentIdentity, AuthenticationError
+from agent_trust.ratelimit import RateLimitResult
 from agent_trust.tools.scoring import check_trust, compare_agents, get_score_breakdown
 
 # ---------------------------------------------------------------------------
@@ -17,6 +18,10 @@ from agent_trust.tools.scoring import check_trust, compare_agents, get_score_bre
 
 _AGENT_A = str(uuid.uuid4())
 _AGENT_B = str(uuid.uuid4())
+
+_RATE_LIMIT_ALLOWED = RateLimitResult(
+    allowed=True, limit=60, remaining=59, reset_at=9_999_999_999
+)
 
 
 def _make_identity(agent_id: str = _AGENT_A, scopes: list[str] | None = None) -> AgentIdentity:
@@ -115,6 +120,10 @@ async def test_check_trust_basic():
         patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
         patch("agent_trust.tools.scoring.ScoreComputation", return_value=mock_engine),
         patch("agent_trust.tools.scoring.upsert_trust_score", new=AsyncMock()),
+        patch(
+            "agent_trust.ratelimit.check_rate_limit",
+            AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+        ),
     ):
         result = await check_trust(agent_id=_AGENT_A)
 
@@ -148,6 +157,10 @@ async def test_check_trust_with_auth_adds_breakdown():
         patch("agent_trust.tools.scoring.AgentAuthProvider", return_value=mock_provider),
         patch("agent_trust.tools.scoring.ScoreComputation", return_value=mock_engine),
         patch("agent_trust.tools.scoring.upsert_trust_score", new=AsyncMock()),
+        patch(
+            "agent_trust.ratelimit.check_rate_limit",
+            AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+        ),
     ):
         result = await check_trust(agent_id=_AGENT_A, access_token="tok")
 
@@ -168,7 +181,13 @@ async def test_check_trust_agent_not_found():
 
     session.execute = execute
 
-    with patch("agent_trust.tools.scoring.get_session", side_effect=_session_factory(session)):
+    with (
+        patch("agent_trust.tools.scoring.get_session", side_effect=_session_factory(session)),
+        patch(
+            "agent_trust.ratelimit.check_rate_limit",
+            AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+        ),
+    ):
         result = await check_trust(agent_id=str(uuid.uuid4()))
 
     assert "error" in result
@@ -186,7 +205,11 @@ async def test_check_trust_invalid_score_type():
 @pytest.mark.asyncio
 async def test_check_trust_invalid_uuid():
     """Malformed UUID → returns error."""
-    result = await check_trust(agent_id="not-a-uuid")
+    with patch(
+        "agent_trust.ratelimit.check_rate_limit",
+        AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+    ):
+        result = await check_trust(agent_id="not-a-uuid")
     assert "error" in result
     assert "Invalid agent_id UUID" in result["error"]
 
@@ -211,6 +234,10 @@ async def test_check_trust_uses_cache():
     with (
         patch("agent_trust.tools.scoring.get_session", side_effect=_session_factory(session)),
         patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
+        patch(
+            "agent_trust.ratelimit.check_rate_limit",
+            AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+        ),
     ):
         result = await check_trust(agent_id=_AGENT_A)
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent_trust.engine.sybil_detector import get_sybil_credibility_multiplier
 from agent_trust.models import Agent, Dispute, Interaction, TrustScore
 
 log = structlog.get_logger()
@@ -66,6 +67,10 @@ class ScoreComputation:
         alpha, beta = self.prior_alpha, self.prior_beta
         now = datetime.now(UTC)
 
+        # Caches for per-reporter and per-pair computations
+        sybil_cache: dict[uuid.UUID, float] = {}
+        mutual_pair_cache: dict[tuple[uuid.UUID, uuid.UUID], int] = {}
+
         for ix in interactions:
             age_days = (now - ix.reported_at).total_seconds() / 86400
             time_weight = 0.5 ** (age_days / self.half_life_days)
@@ -75,7 +80,32 @@ class ScoreComputation:
             level_weight = self.trust_level_weights.get(reporter_auth_level, 0.8)
             credibility = (0.5 + reporter_trust * 0.5) * level_weight
 
-            mutual = self.mutual_confirmation_bonus if ix.mutually_confirmed else 1.0
+            # Fix #1: Apply sybil credibility multiplier
+            if ix.reported_by not in sybil_cache:
+                sybil_cache[ix.reported_by] = await get_sybil_credibility_multiplier(
+                    ix.reported_by, session
+                )
+            credibility *= sybil_cache[ix.reported_by]
+
+            # Fix #5: Low-interaction reporters get reduced weight
+            reporter_interaction_count = await self._get_reporter_interaction_count(
+                ix.reported_by, session
+            )
+            if reporter_interaction_count < 3:
+                credibility *= 0.3
+
+            # Fix #2: Mutual confirmation with diminishing returns
+            if ix.mutually_confirmed:
+                pair_key = (min(agent_id, ix.reported_by), max(agent_id, ix.reported_by))
+                if pair_key not in mutual_pair_cache:
+                    mutual_pair_cache[pair_key] = await self._count_mutual_pair_confirmations(
+                        agent_id, ix.reported_by, session
+                    )
+                pair_count = mutual_pair_cache[pair_key]
+                mutual = max(1.5 - 0.1 * max(0, pair_count - 1), 1.0)
+            else:
+                mutual = 1.0
+
             w = time_weight * credibility * mutual
 
             is_reporter = ix.reported_by == agent_id
@@ -105,10 +135,14 @@ class ScoreComputation:
         score = raw_score * penalty
 
         dismissed_filed = await self._count_dismissed_disputes_filed_by(agent_id, session)
-        dismissed_penalty = max(
-            1.0 - dismissed_filed * self.dismissed_penalty_per,
-            self.dismissed_penalty_floor,
-        )
+        # Fix #6: Exponential dismissed-dispute penalty
+        if dismissed_filed == 0:
+            dismissed_penalty = 1.0
+        else:
+            total_reduction = sum(
+                self.dismissed_penalty_per * (1.5 ** i) for i in range(dismissed_filed)
+            )
+            dismissed_penalty = max(1.0 - total_reduction, self.dismissed_penalty_floor)
         score = score * dismissed_penalty
         score = round(min(max(score, 0.0), 1.0), 4)
 
@@ -196,13 +230,19 @@ class ScoreComputation:
         agent_id: uuid.UUID,
         session: AsyncSession,
     ) -> str:
-        """Get an agent's auth trust level from their profile."""
+        """Get an agent's auth trust level from their profile.
+
+        Fix #8: Trust level is derived ONLY from auth_source and agentauth_linked,
+        never from user-supplied metadata (prevents trust_level spoofing).
+        """
         result = await session.execute(select(Agent).where(Agent.agent_id == agent_id))
         agent = result.scalar_one_or_none()
         if not agent:
-            return "standalone"
+            return "ephemeral"
         if agent.auth_source == "agentauth" and agent.agentauth_linked:
-            return agent.metadata_.get("trust_level", "delegated")
+            return "delegated"
+        elif agent.auth_source == "agentauth" and not agent.agentauth_linked:
+            return "ephemeral"
         elif agent.auth_source == "standalone":
             return "standalone"
         return "ephemeral"
@@ -237,6 +277,46 @@ class ScoreComputation:
                 Dispute.filed_by == agent_id,
                 Dispute.status == "resolved",
                 Dispute.resolution == "dismissed",
+            )
+        )
+        return result.scalar() or 0
+
+    async def _get_reporter_interaction_count(
+        self,
+        agent_id: uuid.UUID,
+        session: AsyncSession,
+    ) -> int:
+        """Get the interaction count for a reporter from their overall trust score."""
+        result = await session.execute(
+            select(TrustScore).where(
+                TrustScore.agent_id == agent_id,
+                TrustScore.score_type == "overall",
+            )
+        )
+        score_row = result.scalar_one_or_none()
+        return score_row.interaction_count if score_row else 0
+
+    async def _count_mutual_pair_confirmations(
+        self,
+        agent_id: uuid.UUID,
+        reporter_id: uuid.UUID,
+        session: AsyncSession,
+    ) -> int:
+        """Count mutually confirmed interactions between this pair in last 30 days."""
+        cutoff = datetime.now(UTC) - timedelta(days=30)
+        result = await session.execute(
+            select(func.count())
+            .select_from(Interaction)
+            .where(
+                Interaction.mutually_confirmed == True,  # noqa: E712
+                Interaction.reported_at >= cutoff,
+                (
+                    (Interaction.initiator_id == agent_id)
+                    & (Interaction.counterparty_id == reporter_id)
+                ) | (
+                    (Interaction.initiator_id == reporter_id)
+                    & (Interaction.counterparty_id == agent_id)
+                ),
             )
         )
         return result.scalar() or 0

@@ -36,6 +36,14 @@ An interaction report captures a single event between two agents. Key fields:
 
 Self-reporting (reporter is also the subject) is blocked at the database constraint level.
 
+### Interaction Submission Limits
+
+To prevent abuse, the following constraints are enforced at submission time:
+
+- **Per-pair daily cap** — at most 10 interactions may be reported between the same (reporter, counterparty) pair within any 24-hour window. Reports exceeding this cap are rejected with an error.
+- **Deduplication window** — reports with the same (reporter, counterparty, interaction_type) combination are deduplicated within a 1-hour window. Submitting an identical report within that window is rejected as a duplicate.
+- **Context size limit** — the `context` JSONB field is capped at 10 KB. The `evidence_hash` field, when provided, must be a 64-character lowercase hex string (SHA-256).
+
 ---
 
 ## The Scoring Formula
@@ -48,13 +56,13 @@ Every agent starts with a Beta distribution prior of `α = 2, β = 2`, which cor
 
 For each interaction relevant to a score type, a weight is computed:
 
-$$w = \underbrace{0.5^{\,\text{age\_days} \;/\; \text{half\_life}}}_{\text{time decay}} \;\times\; \underbrace{\bigl(0.5 + \text{reporter\_score} \times 0.5\bigr) \times \text{level\_weight}}_{\text{reporter credibility}} \;\times\; \underbrace{\text{mutual\_bonus}}_{\text{1.5 if confirmed, else 1.0}}$$
+$$w = \underbrace{0.5^{\,\text{age\_days} \;/\; \text{half\_life}}}_{\text{time decay}} \;\times\; \underbrace{\bigl(0.5 + \text{reporter\_score} \times 0.5\bigr) \times \text{level\_weight} \times \text{sybil\_multiplier} \times \text{interaction\_count\_penalty}}_{\text{reporter credibility}} \;\times\; \underbrace{\text{mutual\_bonus}}_{\text{diminishing returns}}$$
 
 Three factors combine into the weight:
 
 - **Time decay** — older interactions count less. The default half-life is 90 days (configurable via `SCORE_HALF_LIFE_DAYS`).
-- **Reporter credibility** — higher-scoring reporters carry more weight, scaled further by their trust level (see below).
-- **Mutual confirmation bonus** — a 1.5× multiplier when both parties independently reported the same interaction, rewarding verifiable evidence.
+- **Reporter credibility** — higher-scoring reporters carry more weight, scaled further by their trust level, Sybil risk, and interaction history (see below).
+- **Mutual confirmation bonus** — a multiplier when both parties independently reported the same interaction, rewarding verifiable evidence. Subject to diminishing returns across repeated confirmations between the same pair (see below).
 
 ### Step 3 — Beta Parameter Update
 
@@ -90,9 +98,19 @@ $$\text{dispute\_penalty} = \max\!\bigl(1.0 - \text{lost\_disputes} \times 0.03,
 
 **Frivolous-filing penalty** — for agents who filed disputes that were then dismissed:
 
-$$\text{dismissed\_penalty} = \max\!\bigl(1.0 - \text{dismissed\_filed} \times 0.01,\; 0.9\bigr)$$
+$$\text{dismissed\_penalty} = \max\!\Bigl(1.0 - \sum_{i=0}^{\text{dismissed\_filed}-1} 0.01 \times 1.5^{\,i},\; 0.9\Bigr)$$
 
-The floor values (0.5 and 0.9) ensure penalties cannot collapse a score to zero and that the lighter penalty for frivolous filing has a higher floor.
+The growth is exponential — each successive dismissal costs more than the previous one:
+
+| Dismissed disputes | Penalty multiplier |
+| ------------------ | ------------------ |
+| 1                  | 0.9900             |
+| 2                  | 0.9750             |
+| 3                  | 0.9525             |
+| 5                  | 0.8681             |
+| 6+                 | 0.9000 (floor)     |
+
+The floor (0.9) ensures the score can lose at most 10% from frivolous filing, but it is now reached much faster — roughly 5–6 dismissals instead of 10.
 
 ### Step 6 — Final Score
 
@@ -123,11 +141,17 @@ A reporter's contribution to a score is weighted by their **trust level**, which
 
 An agent authenticating via AgentAuth with delegated credentials carries full weight. A standalone Ed25519 agent carries slightly less. Ephemeral agents carry the least.
 
-Combined with their current overall score, the full credibility factor is:
+> **Security note:** Trust level is derived exclusively from server-side fields — `auth_source` (the authentication method recorded by the auth layer: `agentauth`, `standalone`, or `ephemeral`) and the `agentauth_linked` boolean flag set during token introspection. It is **never** read from user-supplied `metadata_` JSONB. Reading security-critical fields from user metadata would allow any agent to self-declare `root` level and gain a 1.2× credibility boost.
 
-$$\text{credibility} = \bigl(0.5 + \text{reporter\_overall\_score} \times 0.5\bigr) \times \text{level\_weight}$$
+Combined with their current overall score, Sybil risk, and interaction history, the full credibility factor is:
 
-A reporter with a score of 0.5 (neutral) and `standalone` level contributes exactly `0.5 × 0.8 = 0.4` credibility weight. A `root`-level agent with a 1.0 score contributes `1.0 × 1.2 = 1.2`.
+$$\text{credibility} = \bigl(0.5 + \text{reporter\_overall\_score} \times 0.5\bigr) \times \text{level\_weight} \times \text{sybil\_multiplier} \times \text{interaction\_count\_penalty}$$
+
+Where:
+- **`sybil_multiplier`** — 0.3× (high risk, Sybil score ≥ 0.7), 0.6× (suspicious, Sybil score ≥ 0.4), 1.0× (clean).
+- **`interaction_count_penalty`** — 0.3 if the reporter has fewer than 3 recorded interactions; 1.0 otherwise. New reporters carry only 30% weight until they establish a track record.
+
+A reporter with a score of 0.5 (neutral), `standalone` level, no Sybil flags, and ≥ 3 interactions contributes exactly `0.5 × 0.8 × 1.0 × 1.0 = 0.4` credibility weight. A `root`-level agent with a 1.0 score contributes `1.0 × 1.2 = 1.2`.
 
 ---
 
@@ -137,14 +161,16 @@ The following examples use two fresh agents to show exactly how each outcome aff
 
 **Setup**
 
-- **Agent A** — standalone auth, default score = 0.5, no prior interactions
-- **Agent B** — standalone auth, default score = 0.5, no prior interactions
+- **Agent A** — standalone auth, default score = 0.5, ≥ 3 prior interactions (interaction_count_penalty = 1.0), not Sybil-flagged (sybil_multiplier = 1.0)
+- **Agent B** — standalone auth, default score = 0.5, ≥ 3 prior interactions (interaction_count_penalty = 1.0), not Sybil-flagged (sybil_multiplier = 1.0)
 
 A calls `report_interaction` with `interaction_type = transaction`. A `transaction` interaction contributes to both `overall` and `reliability` score types; `responsiveness` and `honesty` are unaffected.
 
 ### Shared weight calculation (used in all single-report examples)
 
-$$\text{credibility} = (0.5 + 0.5 \times 0.5) \times 0.8 = 0.75 \times 0.8 = 0.60$$
+With both agents having ≥ 3 interactions and no Sybil flags, `interaction_count_penalty = 1.0` and `sybil_multiplier = 1.0`, so the full formula reduces to the base case:
+
+$$\text{credibility} = (0.5 + 0.5 \times 0.5) \times 0.8 \times 1.0 \times 1.0 = 0.75 \times 0.8 = 0.60$$
 
 $$w = \underbrace{1.0}_{\text{age = 0 days}} \times 0.60 \times \underbrace{1.0}_{\text{not confirmed}} = 0.60$$
 
@@ -267,6 +293,10 @@ $$\text{confidence} = 1 - \frac{1}{1 + 2 \times 0.1} = 1 - \frac{1}{1.2} = 0.166
 
 The mutual confirmation bonus (1.5×) substantially increases the effective weight. The scores are nearly symmetric but Agent A (who delivered as counterparty in the second report) receives slightly more total credit.
 
+> **Diminishing returns:** The 1.5× bonus applies to the **first** mutually confirmed interaction between a given pair. Subsequent confirmations within the same scoring window are subject to diminishing returns:
+> $$\text{mutual\_bonus} = \max\!\bigl(1.5 - 0.1 \times (\text{pair\_count} - 1),\; 1.0\bigr)$$
+> where `pair_count` is the number of existing mutually-confirmed interactions between this specific pair. The 2nd confirmation yields 1.4×, the 3rd 1.3×, and the 6th onward is capped at 1.0× (no bonus). The example above shows the first confirmation (pair_count = 1 → bonus = 1.5).
+
 ---
 
 ### Time decay effect
@@ -340,6 +370,7 @@ After `report_interaction` is called or a dispute is resolved, an arq job `recom
 3. Upserts the results in the `trust_scores` table.
 4. Invalidates the Redis cache for that agent (`score:{agent_id}:*`).
 5. If the overall score changed, enqueues `dispatch_alerts` to notify subscribers.
+6. If the overall score dropped by more than 0.10 in this recomputation, any outstanding non-revoked attestations for the agent are **proactively revoked**. This prevents agents from presenting stale high-score attestations after a significant trust event.
 
 ### Synchronous (cache miss path)
 
@@ -381,7 +412,7 @@ The detector exposes a credibility multiplier that can suppress a suspicious rep
 | Suspicious (`risk_score ≥ 0.4`) | 0.6×       |
 | Clean                           | 1.0×       |
 
-> **Note:** The Sybil multiplier is implemented as a standalone utility (`get_sybil_credibility_multiplier`) and is not yet wired into the main `ScoreComputation.compute()` loop. When integrated, it would reduce the effective weight of interactions reported by Sybil-flagged agents.
+> The Sybil multiplier is computed via `get_sybil_credibility_multiplier()` in `sybil_detector.py` and is **actively applied** inside `ScoreComputation.compute()` for every reporter. Results are cached per-reporter within a single recomputation to avoid redundant database queries.
 
 ---
 
@@ -391,6 +422,6 @@ The detector exposes a credibility multiplier that can suppress a suspicious rep
 | ----------------------- | ------- | ----------------------------------- |
 | `SCORE_HALF_LIFE_DAYS`  | `90`    | Exponential decay half-life in days |
 | `DISPUTE_PENALTY`       | `0.03`  | Penalty per lost dispute            |
-| `ATTESTATION_TTL_HOURS` | `24`    | Default attestation validity window |
+| `ATTESTATION_TTL_HOURS` | `12`    | Default attestation validity window |
 
 The `DISPUTE_PENALTY` value maps directly to `dispute_penalty_per` in `ScoreComputation`. Floor values and the dismissed-penalty rate are hardcoded constants in `score_engine.py`.

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import binascii
+import json as _json
 import uuid
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 import structlog
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select
 
 from agent_trust.auth.agentauth import AgentAuthProvider
@@ -17,6 +17,38 @@ from agent_trust.db.session import get_session
 from agent_trust.models import Agent, TrustScore
 
 log = structlog.get_logger()
+
+
+async def _check_delegation_cycle(
+    proposed_child_id: uuid.UUID,
+    proposed_parent_id: uuid.UUID,
+    session,
+) -> bool:
+    """Return True if setting delegated_by=proposed_parent would create
+    a cycle or exceed depth 5.
+    """
+    from sqlalchemy import select
+
+    from agent_trust.models import Agent
+
+    visited: set[uuid.UUID] = {proposed_child_id}
+    current_id = proposed_parent_id
+    depth = 0
+
+    while current_id and depth < 10:
+        if current_id in visited:
+            return True  # cycle detected
+        visited.add(current_id)
+        depth += 1
+        if depth > 5:
+            return True  # chain too deep
+
+        result = await session.execute(
+            select(Agent.delegated_by).where(Agent.agent_id == current_id)
+        )
+        current_id = result.scalar_one_or_none()
+
+    return False
 
 
 async def _resolve_identity(
@@ -37,7 +69,12 @@ async def _ensure_agent_profile(
     metadata: dict | None = None,
     public_key: bytes | None = None,
 ) -> tuple[Agent, bool]:
-    """Get or create an agent profile. Returns (agent, created)."""
+    """Get or create an agent profile. Returns (agent, created).
+    
+    NOTE: If delegated_by is ever set via this function or elsewhere, 
+    it MUST be validated using _check_delegation_cycle() to prevent
+    infinite delegation chains and cycles.
+    """
     async with get_session() as session:
         result = await session.execute(select(Agent).where(Agent.agent_id == agent_id))
         existing = result.scalar_one_or_none()
@@ -101,6 +138,25 @@ async def register_agent(
         ``agent_id``, ``source`` ("agentauth" or "standalone"), ``scopes``,
         ``created`` (bool), ``registered_at``, and ``display_name``.
     """
+    # Input size validation
+    if display_name is not None and len(display_name) > 200:
+        return {"error": "display_name too long: maximum 200 characters"}
+
+    if capabilities is not None:
+        if len(capabilities) > 50:
+            return {"error": "Too many capabilities: maximum 50"}
+        for cap in capabilities:
+            if not isinstance(cap, str) or len(cap) > 100:
+                return {"error": "Each capability must be a string of max 100 characters"}
+
+    if metadata is not None:
+        try:
+            metadata_size = len(_json.dumps(metadata).encode("utf-8"))
+        except (TypeError, ValueError):
+            return {"error": "metadata must be a JSON-serializable object"}
+        if metadata_size > 10240:
+            return {"error": f"metadata payload too large: {metadata_size} bytes (max 10240)"}
+
     if access_token:
         identity = await _resolve_identity(access_token, None)
         agent_id = uuid.UUID(identity.agent_id)

@@ -21,14 +21,14 @@ async def test_authenticate_requires_public_key(provider):
 
 @pytest.mark.asyncio
 async def test_authenticate_invalid_hex(provider):
-    with pytest.raises(AuthenticationError, match="Invalid public_key_hex"):
+    with pytest.raises(AuthenticationError, match="Legacy public_key_hex authentication has been removed"):
         await provider.authenticate(public_key_hex="not-valid-hex!!!")
 
 
 @pytest.mark.asyncio
 async def test_authenticate_unknown_key(provider):
     provider._lookup_by_public_key = AsyncMock(return_value=None)
-    with pytest.raises(AuthenticationError, match="Unknown public key"):
+    with pytest.raises(AuthenticationError, match="Legacy public_key_hex authentication has been removed"):
         await provider.authenticate(public_key_hex="deadbeef")
 
 
@@ -42,12 +42,9 @@ async def test_authenticate_known_key():
     provider = StandaloneProvider(db_session=None)
     provider._lookup_by_public_key = AsyncMock(return_value=mock_agent)
 
-    identity = await provider.authenticate(public_key_hex="deadbeef01")
-
-    assert identity.source == "standalone"
-    assert identity.trust_level == "standalone"
-    assert "trust.read" in identity.scopes
-    assert "trust.report" in identity.scopes
+    # Legacy public key authentication no longer works - it raises an error
+    with pytest.raises(AuthenticationError, match="Legacy public_key_hex authentication has been removed"):
+        await provider.authenticate(public_key_hex="deadbeef01")
 
 
 @pytest.mark.asyncio

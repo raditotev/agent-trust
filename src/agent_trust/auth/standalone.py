@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import binascii
 import uuid
 
 import jwt
@@ -97,26 +96,17 @@ class StandaloneProvider:
         )
 
     async def _authenticate_public_key_hex(self, public_key_hex: str) -> AgentIdentity:
-        """Authenticate via Ed25519 public key lookup (legacy, no crypto proof)."""
-        try:
-            public_key_bytes = bytes.fromhex(public_key_hex)
-        except (ValueError, binascii.Error) as e:
-            raise AuthenticationError(f"Invalid public_key_hex format: {e}") from e
+        """Legacy public key lookup path — REMOVED for security.
 
-        agent = await self._lookup_by_public_key(public_key_bytes)
-        if not agent:
-            raise AuthenticationError("Unknown public key — register first via register_agent")
-
-        log.debug(
-            "standalone_pubkey_lookup_auth",
-            agent_id=str(agent.agent_id),
-            warning="no_crypto_proof",
-        )
-        return AgentIdentity(
-            agent_id=str(agent.agent_id),
-            source="standalone",
-            scopes=STANDALONE_SCOPES,
-            trust_level="standalone",
+        This path had no cryptographic proof of key ownership. Use a signed JWT instead:
+        1. Generate a token: call the generate_agent_token tool with your agent_id and
+           private_key_hex
+        2. Pass the resulting access_token to authenticate
+        """
+        raise AuthenticationError(
+            "Legacy public_key_hex authentication has been removed (no proof of key ownership). "
+            "Use a signed JWT instead: call generate_agent_token(agent_id, private_key_hex) "
+            "and pass the resulting access_token."
         )
 
     async def check_permission(

@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy import select
 
+from agent_trust.tools.alerts import PERMITTED_CALLBACK_TOOLS
+
 log = structlog.get_logger()
 
 
@@ -42,7 +44,17 @@ async def dispatch_alerts(ctx: dict, agent_id: str, old_score: float, new_score:
         subscriptions = result.scalars().all()
 
         for sub in subscriptions:
+            # Defense in depth: re-validate callback_tool against allowlist before dispatching
+            if sub.callback_tool not in PERMITTED_CALLBACK_TOOLS:
+                log.warning(
+                    "alert_dispatch_blocked_invalid_callback",
+                    subscriber_id=str(sub.subscriber_id),
+                    callback_tool=sub.callback_tool,
+                )
+                continue
+
             if delta >= float(sub.threshold_delta):
+                # callback_tool has been validated at subscription time and re-validated above
                 alert_payload = {
                     "watched_agent_id": agent_id,
                     "old_score": round(old_score, 4),

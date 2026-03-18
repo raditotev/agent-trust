@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_trust.auth.identity import AgentIdentity
+from agent_trust.ratelimit import RateLimitResult
 from agent_trust.tools.interactions import get_interaction_history, report_interaction
 
 # ---------------------------------------------------------------------------
@@ -16,6 +17,10 @@ from agent_trust.tools.interactions import get_interaction_history, report_inter
 
 _REPORTER_ID = str(uuid.uuid4())
 _COUNTERPARTY_ID = str(uuid.uuid4())
+
+_RATE_LIMIT_ALLOWED = RateLimitResult(
+    allowed=True, limit=60, remaining=59, reset_at=9_999_999_999
+)
 
 
 def _make_identity(agent_id: str = _REPORTER_ID, scopes: list[str] | None = None) -> AgentIdentity:
@@ -65,6 +70,8 @@ def _make_session_mock(
     counterparty_report=None,
     history_agent=None,
     history_interactions=None,
+    pair_count=0,
+    duplicate_check=None,
 ):
     """Build a mock async session that returns configured DB results."""
     session = MagicMock()
@@ -82,6 +89,13 @@ def _make_session_mock(
         elif n == 1:
             result.scalar_one_or_none.return_value = counterparty_agent
         elif n == 2:
+            # pair_count query: func.count() -> scalar()
+            result.scalar.return_value = pair_count
+        elif n == 3:
+            # deduplication check -> scalar_one_or_none()
+            result.scalar_one_or_none.return_value = duplicate_check
+        elif n == 4:
+            # counterparty report lookup -> scalar_one_or_none()
             result.scalar_one_or_none.return_value = counterparty_report
         else:
             result.scalar_one_or_none.return_value = history_agent
@@ -123,6 +137,10 @@ class TestReportInteraction:
                 "agent_trust.tools.interactions._enqueue_score_recomputation",
                 new=AsyncMock(),
             ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await report_interaction(
                 counterparty_id=_COUNTERPARTY_ID,
@@ -161,9 +179,15 @@ class TestReportInteraction:
     async def test_report_interaction_invalid_type(self):
         identity = _make_identity()
 
-        with patch(
-            "agent_trust.tools.interactions._resolve_identity_for_interaction",
-            new=AsyncMock(return_value=identity),
+        with (
+            patch(
+                "agent_trust.tools.interactions._resolve_identity_for_interaction",
+                new=AsyncMock(return_value=identity),
+            ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await report_interaction(
                 counterparty_id=_COUNTERPARTY_ID,
@@ -179,9 +203,15 @@ class TestReportInteraction:
     async def test_report_interaction_invalid_outcome(self):
         identity = _make_identity()
 
-        with patch(
-            "agent_trust.tools.interactions._resolve_identity_for_interaction",
-            new=AsyncMock(return_value=identity),
+        with (
+            patch(
+                "agent_trust.tools.interactions._resolve_identity_for_interaction",
+                new=AsyncMock(return_value=identity),
+            ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await report_interaction(
                 counterparty_id=_COUNTERPARTY_ID,
@@ -197,9 +227,15 @@ class TestReportInteraction:
     async def test_report_interaction_self_report(self):
         identity = _make_identity(agent_id=_REPORTER_ID)
 
-        with patch(
-            "agent_trust.tools.interactions._resolve_identity_for_interaction",
-            new=AsyncMock(return_value=identity),
+        with (
+            patch(
+                "agent_trust.tools.interactions._resolve_identity_for_interaction",
+                new=AsyncMock(return_value=identity),
+            ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await report_interaction(
                 counterparty_id=_REPORTER_ID,  # same as reporter
@@ -242,6 +278,10 @@ class TestReportInteraction:
                 "agent_trust.tools.interactions._enqueue_score_recomputation",
                 new=AsyncMock(),
             ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await report_interaction(
                 counterparty_id=_COUNTERPARTY_ID,
@@ -271,6 +311,10 @@ class TestReportInteraction:
             patch(
                 "agent_trust.tools.interactions.get_session",
                 return_value=_fake_session_ctx(session),
+            ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
             ),
         ):
             result = await report_interaction(
@@ -311,11 +355,19 @@ class TestGetInteractionHistory:
 
         session.execute = execute
 
-        with patch(
-            "agent_trust.tools.interactions.get_session",
-            return_value=_fake_session_ctx(session),
+        identity = _make_identity(agent_id=_REPORTER_ID)
+
+        with (
+            patch(
+                "agent_trust.tools.interactions.get_session",
+                return_value=_fake_session_ctx(session),
+            ),
+            patch(
+                "agent_trust.auth.resolve.resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
         ):
-            result = await get_interaction_history(agent_id=_REPORTER_ID)
+            result = await get_interaction_history(agent_id=_REPORTER_ID, access_token="token")
 
         assert "error" not in result
         assert result["agent_id"] == _REPORTER_ID
@@ -345,13 +397,22 @@ class TestGetInteractionHistory:
 
         session.execute = execute
 
-        with patch(
-            "agent_trust.tools.interactions.get_session",
-            return_value=_fake_session_ctx(session),
+        identity = _make_identity(agent_id=_REPORTER_ID)
+
+        with (
+            patch(
+                "agent_trust.tools.interactions.get_session",
+                return_value=_fake_session_ctx(session),
+            ),
+            patch(
+                "agent_trust.auth.resolve.resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
         ):
             result = await get_interaction_history(
                 agent_id=_REPORTER_ID,
                 outcome="failure",
+                access_token="token",
             )
 
         assert "error" not in result
@@ -369,11 +430,19 @@ class TestGetInteractionHistory:
 
         session.execute = execute
 
-        with patch(
-            "agent_trust.tools.interactions.get_session",
-            return_value=_fake_session_ctx(session),
+        identity = _make_identity(agent_id=_REPORTER_ID)
+
+        with (
+            patch(
+                "agent_trust.tools.interactions.get_session",
+                return_value=_fake_session_ctx(session),
+            ),
+            patch(
+                "agent_trust.auth.resolve.resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
         ):
-            result = await get_interaction_history(agent_id=_REPORTER_ID)
+            result = await get_interaction_history(agent_id=_REPORTER_ID, access_token="token")
 
         assert "error" in result
         assert "Agent not found" in result["error"]
@@ -399,11 +468,21 @@ class TestGetInteractionHistory:
 
         session.execute = execute
 
-        with patch(
-            "agent_trust.tools.interactions.get_session",
-            return_value=_fake_session_ctx(session),
+        identity = _make_identity(agent_id=_REPORTER_ID)
+
+        with (
+            patch(
+                "agent_trust.tools.interactions.get_session",
+                return_value=_fake_session_ctx(session),
+            ),
+            patch(
+                "agent_trust.auth.resolve.resolve_identity",
+                new=AsyncMock(return_value=identity),
+            ),
         ):
-            result = await get_interaction_history(agent_id=_REPORTER_ID, limit=9999)
+            result = await get_interaction_history(
+                agent_id=_REPORTER_ID, limit=9999, access_token="token"
+            )
 
         assert "error" not in result
         # No error means the clamping worked; the DB was queried with limit=200
