@@ -74,36 +74,52 @@ async def recompute_score(ctx: dict, agent_id: str) -> dict:
                     error=str(e),
                 )
 
-        # Proactive attestation revocation on significant score drop
+        # Proactive attestation revocation — cumulative drop from each attestation's issuance score
         try:
             new_overall_score = updated_scores.get("overall")
-            if old_overall is not None and new_overall_score is not None:
-                score_drop = old_overall - new_overall_score
-                if score_drop > 0.10:
-                    from datetime import UTC, datetime
+            if new_overall_score is not None:
+                from datetime import UTC, datetime
 
-                    from agent_trust.models.attestation import Attestation
+                from agent_trust.models.attestation import Attestation
 
-                    now = datetime.now(UTC)
-                    attest_result = await session.execute(
-                        select(Attestation).where(
-                            Attestation.subject_id == agent_uuid,
-                            ~Attestation.revoked,
-                            Attestation.valid_until > now,
-                        )
+                now = datetime.now(UTC)
+                threshold = settings.attestation_cumulative_revocation_threshold
+                attest_result = await session.execute(
+                    select(Attestation).where(
+                        Attestation.subject_id == agent_uuid,
+                        ~Attestation.revoked,
+                        Attestation.valid_until > now,
                     )
-                    attestations_to_revoke = attest_result.scalars().all()
-                    revoked_count = 0
-                    for attest in attestations_to_revoke:
-                        attest.revoked = True
-                        revoked_count += 1
-                    if revoked_count > 0:
-                        log.info(
-                            "attestations_proactively_revoked",
-                            agent_id=agent_id,
-                            revoked_count=revoked_count,
-                            score_drop=round(score_drop, 4),
-                        )
+                )
+                active_attestations = attest_result.scalars().all()
+                revoked_count = 0
+                for attest in active_attestations:
+                    snapshot_overall = (
+                        attest.score_snapshot.get("overall", {}).get("score")
+                        if isinstance(attest.score_snapshot, dict)
+                        else None
+                    )
+                    if snapshot_overall is not None:
+                        cumulative_drop = float(snapshot_overall) - new_overall_score
+                        if cumulative_drop > threshold:
+                            attest.revoked = True
+                            revoked_count += 1
+                            log.info(
+                                "attestation_revoked_cumulative_drop",
+                                attestation_id=str(attest.attestation_id),
+                                agent_id=agent_id,
+                                snapshot_score=round(float(snapshot_overall), 4),
+                                current_score=round(new_overall_score, 4),
+                                cumulative_drop=round(cumulative_drop, 4),
+                                threshold=threshold,
+                            )
+                if revoked_count > 0:
+                    log.info(
+                        "attestations_proactively_revoked",
+                        agent_id=agent_id,
+                        revoked_count=revoked_count,
+                        current_overall=round(new_overall_score, 4),
+                    )
         except Exception as e:
             log.warning("attestation_revocation_failed", error=str(e))
 

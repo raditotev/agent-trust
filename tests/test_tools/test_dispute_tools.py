@@ -95,8 +95,9 @@ def _make_session(*scalar_results):
 @pytest.mark.asyncio
 async def test_file_dispute_success():
     interaction = _make_interaction()
-    # Query sequence: dismissed_count, last_dismissed_at, interaction, existing_dispute
-    session = _make_session(0, None, interaction, None)
+    # Query sequence: dismissed_count, last_dismissed_at, interaction,
+    # filer_daily_count, filer_open_count, open_count, existing_dispute
+    session = _make_session(0, None, interaction, 0, 0, 0, None)
 
     provider = MagicMock()
     provider.authenticate = AsyncMock(return_value=_make_identity())
@@ -200,8 +201,9 @@ async def test_file_dispute_interaction_not_found():
 async def test_file_dispute_duplicate_open():
     interaction = _make_interaction()
     existing_dispute = _make_dispute(status="open")
-    # Query sequence: dismissed_count, last_dismissed_at, interaction, open_count, existing_dispute
-    session = _make_session(0, None, interaction, 0, existing_dispute)
+    # Query sequence: dismissed_count, last_dismissed_at, interaction,
+    # filer_daily_count, filer_open_count, open_count, existing_dispute
+    session = _make_session(0, None, interaction, 0, 0, 0, existing_dispute)
 
     provider = MagicMock()
     provider.authenticate = AsyncMock(return_value=_make_identity())

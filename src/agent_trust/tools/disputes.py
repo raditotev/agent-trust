@@ -144,6 +144,49 @@ async def file_dispute(
             else interaction.initiator_id
         )
 
+        # Per-filer daily cap: max dispute_filer_daily_cap new disputes in 24 hours
+        daily_cutoff = datetime.now(UTC) - timedelta(hours=24)
+        filer_daily_result = await session.execute(
+            select(func.count())
+            .select_from(Dispute)
+            .where(
+                Dispute.filed_by == filer_uuid,
+                Dispute.created_at >= daily_cutoff,
+            )
+        )
+        filer_daily_count = filer_daily_result.scalar() or 0
+        if filer_daily_count >= settings.dispute_filer_daily_cap:
+            return {
+                "error": (
+                    f"Daily dispute limit reached: you have filed {filer_daily_count} disputes "
+                    f"in the last 24 hours (maximum: {settings.dispute_filer_daily_cap}). "
+                    "Wait before filing more disputes."
+                ),
+                "disputes_filed_today": filer_daily_count,
+                "daily_cap": settings.dispute_filer_daily_cap,
+            }
+
+        # Per-filer open cap: max dispute_filer_open_cap open disputes across all targets
+        filer_open_result = await session.execute(
+            select(func.count())
+            .select_from(Dispute)
+            .where(
+                Dispute.filed_by == filer_uuid,
+                Dispute.status == "open",
+            )
+        )
+        filer_open_count = filer_open_result.scalar() or 0
+        if filer_open_count >= settings.dispute_filer_open_cap:
+            return {
+                "error": (
+                    f"Open dispute limit reached: you already have {filer_open_count} open "
+                    f"disputes across all targets (maximum: {settings.dispute_filer_open_cap}). "
+                    "Wait for existing disputes to be resolved."
+                ),
+                "open_dispute_count": filer_open_count,
+                "open_cap": settings.dispute_filer_open_cap,
+            }
+
         open_count_result = await session.execute(
             select(func.count())
             .select_from(Dispute)

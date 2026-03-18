@@ -15,7 +15,8 @@ log = structlog.get_logger()
 class SybilSignal:
     """A single suspicious activity signal detected for an agent."""
 
-    signal_type: str  # "ring_reporting" | "burst_registration" | "delegation_chain"
+    signal_type: str  # "ring_reporting" | "burst_registration" | "burst_registration_medium"
+    #                    | "burst_registration_slow" | "reporting_velocity" | "delegation_chain"
     severity: float  # 0.0 (minor) to 1.0 (critical)
     description: str
     evidence: dict = field(default_factory=dict)
@@ -65,8 +66,10 @@ class SybilDetector:
         signals: list[SybilSignal] = []
 
         ring = await self._check_ring_reporting(agent_uuid)
-        if ring:
-            signals.append(ring)
+        cycle = await self._check_cycle_reporting(agent_uuid)
+        for sig in (ring, cycle):
+            if sig:
+                signals.append(sig)
 
         burst = await self._check_burst_registration(agent_uuid)
         if burst:
@@ -75,6 +78,10 @@ class SybilDetector:
         delegation = await self._check_delegation_chain(agent_uuid)
         if delegation:
             signals.append(delegation)
+
+        velocity = await self._check_reporting_velocity(agent_uuid)
+        if velocity:
+            signals.append(velocity)
 
         risk_score = max((s.severity for s in signals), default=0.0)
 
@@ -137,11 +144,15 @@ class SybilDetector:
         )
 
     async def _check_burst_registration(self, agent_uuid: uuid.UUID) -> SybilSignal | None:
-        """Detect burst registration: many agents registered within a short time window.
+        """Detect burst registration across short and long time windows.
 
-        Checks if many agents were registered within ±1 hour of this agent's creation.
-        Severity scales with the burst size.
+        Checks three windows to catch both fast bursts and slow Sybil armies:
+        - ±1 hour: threshold 5 (fast burst)
+        - ±12 hours: threshold 20 (medium-rate Sybil)
+        - ±84 hours (3.5 days): threshold 50 (slow Sybil army)
+        Severity scales with window and burst size. Returns the most severe signal.
         """
+        from agent_trust.config import settings
         from agent_trust.models.agent import Agent
 
         result = await self.session.execute(
@@ -151,28 +162,165 @@ class SybilDetector:
         if not registered_at:
             return None
 
-        window_start = registered_at - timedelta(hours=1)
-        window_end = registered_at + timedelta(hours=1)
+        windows = [
+            (1, 5, "burst_registration"),  # ±1hr, ≥5
+            (12, settings.sybil_burst_24h_threshold, "burst_registration_medium"),  # ±12hr, ≥20
+            (84, settings.sybil_burst_7d_threshold, "burst_registration_slow"),  # ±84hr, ≥50
+        ]
 
-        burst_count_result = await self.session.execute(
-            select(func.count())
-            .select_from(Agent)
-            .where(
-                Agent.registered_at >= window_start,
-                Agent.registered_at <= window_end,
+        best_signal: SybilSignal | None = None
+        for window_hours, threshold, signal_type in windows:
+            window_start = registered_at - timedelta(hours=window_hours)
+            window_end = registered_at + timedelta(hours=window_hours)
+            count_result = await self.session.execute(
+                select(func.count())
+                .select_from(Agent)
+                .where(
+                    Agent.registered_at >= window_start,
+                    Agent.registered_at <= window_end,
+                )
+            )
+            burst_count = (count_result.scalar() or 1) - 1  # exclude self
+            if burst_count >= threshold:
+                severity = min(0.2 + burst_count * 0.04, 0.8)
+                signal = SybilSignal(
+                    signal_type=signal_type,
+                    severity=severity,
+                    description=(
+                        f"{burst_count} agents registered within ±{window_hours}h "
+                        f"of this agent (threshold: {threshold})"
+                    ),
+                    evidence={
+                        "burst_count": burst_count,
+                        "window_hours": window_hours * 2,
+                        "threshold": threshold,
+                    },
+                )
+                if best_signal is None or signal.severity > best_signal.severity:
+                    best_signal = signal
+
+        return best_signal
+
+    async def _check_cycle_reporting(self, agent_uuid: uuid.UUID) -> SybilSignal | None:
+        """Detect multi-hop positive-report cycles: A→B→C→D→A (length 3-6).
+
+        The ring_reporting check only finds 2-agent mutual pairs.
+        This method uses BFS to detect longer cycles in the success-report graph
+        within the last 30 days. Cycles of length 3-6 are suspicious.
+        """
+        from collections import deque
+
+        from agent_trust.models.interaction import Interaction
+
+        cutoff = datetime.now(UTC) - timedelta(days=30)
+        MAX_HOPS = 6
+
+        # Build outgoing success-report adjacency within 1-hop neighbourhood
+        rows_result = await self.session.execute(
+            select(Interaction.reported_by, Interaction.counterparty_id).where(
+                Interaction.outcome == "success",
+                Interaction.reported_at >= cutoff,
+                (Interaction.reported_by == agent_uuid)
+                | (Interaction.counterparty_id == agent_uuid),
             )
         )
-        burst_count = (burst_count_result.scalar() or 1) - 1  # exclude self
-
-        if burst_count < 5:
+        rows = rows_result.fetchall()
+        if not rows:
             return None
 
-        severity = min(0.2 + burst_count * 0.04, 0.8)
+        neighbours: set[uuid.UUID] = set()
+        for reporter, counterparty in rows:
+            neighbours.add(reporter)
+            neighbours.add(counterparty)
+
+        if len(neighbours) < 3:
+            return None
+
+        # Fetch all success edges among the neighbourhood
+        edges_result = await self.session.execute(
+            select(Interaction.reported_by, Interaction.counterparty_id).where(
+                Interaction.outcome == "success",
+                Interaction.reported_at >= cutoff,
+                Interaction.reported_by.in_(neighbours),
+                Interaction.counterparty_id.in_(neighbours),
+            )
+        )
+        graph: dict[uuid.UUID, set[uuid.UUID]] = {}
+        for reporter, counterparty in edges_result.fetchall():
+            graph.setdefault(reporter, set()).add(counterparty)
+
+        if agent_uuid not in graph:
+            return None
+
+        # BFS from agent_uuid to find shortest cycle back to itself
+        queue: deque[tuple[uuid.UUID, list[uuid.UUID]]] = deque()
+        for neighbour in graph.get(agent_uuid, set()):
+            if neighbour != agent_uuid:
+                queue.append((neighbour, [agent_uuid, neighbour]))
+
+        shortest_cycle: list[uuid.UUID] | None = None
+        while queue:
+            current, path = queue.popleft()
+            if len(path) > MAX_HOPS + 1:
+                continue
+            if current == agent_uuid and len(path) >= 3:
+                shortest_cycle = path
+                break
+            for nxt in graph.get(current, set()):
+                if nxt not in path[1:] or nxt == agent_uuid:
+                    queue.append((nxt, path + [nxt]))
+
+        if not shortest_cycle:
+            return None
+
+        cycle_length = len(shortest_cycle) - 1  # edges in cycle
+        severity = min(0.4 + (cycle_length - 2) * 0.1, 0.85)
         return SybilSignal(
-            signal_type="burst_registration",
+            signal_type="ring_reporting",
             severity=severity,
-            description=f"{burst_count} agents registered within 1 hour of this agent",
-            evidence={"burst_count": burst_count, "window_hours": 2},
+            description=(
+                f"Positive-report cycle of length {cycle_length} detected "
+                f"in last 30 days (multi-hop ring)"
+            ),
+            evidence={"cycle_length": cycle_length, "cycle_node_count": len(neighbours)},
+        )
+
+    async def _check_reporting_velocity(self, agent_uuid: uuid.UUID) -> SybilSignal | None:
+        """Detect abnormally high negative-report velocity.
+
+        A legitimate agent rarely reports >50 distinct counterparties as failure/timeout
+        within a 24-hour window. High velocity suggests a trust bomb attack.
+        """
+        from agent_trust.config import settings
+        from agent_trust.models.interaction import Interaction
+
+        cutoff = datetime.now(UTC) - timedelta(hours=24)
+
+        velocity_result = await self.session.execute(
+            select(func.count(Interaction.counterparty_id.distinct())).where(
+                Interaction.reported_by == agent_uuid,
+                Interaction.outcome.in_(["failure", "timeout"]),
+                Interaction.reported_at >= cutoff,
+            )
+        )
+        distinct_negative_count = velocity_result.scalar() or 0
+
+        threshold = settings.sybil_report_velocity_threshold
+        if distinct_negative_count < threshold:
+            return None
+
+        severity = min(0.5 + (distinct_negative_count - threshold) * 0.01, 0.95)
+        return SybilSignal(
+            signal_type="reporting_velocity",
+            severity=severity,
+            description=(
+                f"Agent filed {distinct_negative_count} negative reports against "
+                f"distinct counterparties in the last 24h (threshold: {threshold})"
+            ),
+            evidence={
+                "distinct_negative_reports_24h": distinct_negative_count,
+                "threshold": threshold,
+            },
         )
 
     async def _check_delegation_chain(self, agent_uuid: uuid.UUID) -> SybilSignal | None:

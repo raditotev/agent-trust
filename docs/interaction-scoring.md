@@ -43,6 +43,7 @@ To prevent abuse, the following constraints are enforced at submission time:
 - **Per-pair daily cap** — at most 10 interactions may be reported between the same (reporter, counterparty) pair within any 24-hour window. Reports exceeding this cap are rejected with an error.
 - **Deduplication window** — reports with the same (reporter, counterparty, interaction_type) combination are deduplicated within a 1-hour window. Submitting an identical report within that window is rejected as a duplicate.
 - **Context size limit** — the `context` JSONB field is capped at 10 KB. The `evidence_hash` field, when provided, must be a 64-character lowercase hex string (SHA-256).
+- **Prompt injection detection** — string values within the `context` object are scanned for patterns commonly used in adversarial prompts (e.g., `SYSTEM:`, `ignore previous instructions`). If matches are found, the response includes a `"warnings"` field indicating potential injection content. The interaction is still recorded — callers are responsible for sanitizing context fields before passing them to LLM prompts. Retrieved history items with flagged context will include a `"context_warnings"` field.
 
 ---
 
@@ -370,7 +371,7 @@ After `report_interaction` is called or a dispute is resolved, an arq job `recom
 3. Upserts the results in the `trust_scores` table.
 4. Invalidates the Redis cache for that agent (`score:{agent_id}:*`).
 5. If the overall score changed, enqueues `dispatch_alerts` to notify subscribers.
-6. If the overall score dropped by more than 0.10 in this recomputation, any outstanding non-revoked attestations for the agent are **proactively revoked**. This prevents agents from presenting stale high-score attestations after a significant trust event.
+6. Each active attestation's score at issuance (captured in `score_snapshot`) is compared against the new overall score. If the cumulative drop from issuance exceeds the configured threshold (default: 0.10, env var `ATTESTATION_CUMULATIVE_REVOCATION_THRESHOLD`), that attestation is **proactively revoked**. This cumulative check catches gradual multi-cycle degradation (e.g. 0.95 → 0.87 → 0.79) that would slip past a single-cycle delta check.
 
 ### Synchronous (cache miss path)
 
@@ -398,11 +399,16 @@ The full computation details are persisted in the `factor_breakdown` JSONB colum
 
 The `SybilDetector` runs three independent checks and returns a `risk_score` equal to the highest severity signal found:
 
-| Signal               | Trigger                                    | Severity                              |
-| -------------------- | ------------------------------------------ | ------------------------------------- |
-| `ring_reporting`     | ≥ 2 mutual positive reports within 30 days | `min(0.3 + (count − 2) × 0.1, 0.9)`   |
-| `burst_registration` | ≥ 5 agents registered within ±1 hour       | `min(0.2 + count × 0.04, 0.8)`        |
-| `delegation_chain`   | delegation chain depth ≥ 3                 | `min(0.3 + (depth − 3) × 0.15, 0.85)` |
+| Signal                       | Trigger                                                        | Severity                                      |
+| ---------------------------- | -------------------------------------------------------------- | --------------------------------------------- |
+| `ring_reporting`             | ≥ 2 mutual positive reports within 30 days, **or** a positive-report cycle of length 3–6 detected via BFS | `min(0.3 + (count − 2) × 0.1, 0.9)` / `min(0.4 + (len − 2) × 0.1, 0.85)` |
+| `burst_registration`         | ≥ 5 agents registered within ±1 hour                          | `min(0.2 + count × 0.04, 0.8)`               |
+| `burst_registration_medium`  | ≥ 20 agents registered within ±12 hours (slow Sybil army)     | `min(0.2 + count × 0.04, 0.8)`               |
+| `burst_registration_slow`    | ≥ 50 agents registered within ±84 hours (very slow Sybil army)| `min(0.2 + count × 0.04, 0.8)`               |
+| `reporting_velocity`         | ≥ 50 distinct negative (failure/timeout) reports filed by this agent in 24 hours | `min(0.5 + (count − 50) × 0.01, 0.95)` |
+| `delegation_chain`           | delegation chain depth ≥ 3                                     | `min(0.3 + (depth − 3) × 0.15, 0.85)`        |
+
+The `burst_registration` family now checks three time windows to catch slow Sybil armies that stay below the hourly threshold by registering just 4 agents per hour. The `reporting_velocity` signal detects trust-bomb attacks where a high-credibility agent suddenly files many negative reports. The `ring_reporting` signal now includes multi-hop cycle detection (BFS up to 6 hops) to catch coordinated chains like A→B→C→D→A that bypass the simple mutual-pair check.
 
 The detector exposes a credibility multiplier that can suppress a suspicious reporter's contribution to scores:
 
@@ -418,10 +424,16 @@ The detector exposes a credibility multiplier that can suppress a suspicious rep
 
 ## Configuration Reference
 
-| Environment Variable    | Default | Description                         |
-| ----------------------- | ------- | ----------------------------------- |
-| `SCORE_HALF_LIFE_DAYS`  | `90`    | Exponential decay half-life in days |
-| `DISPUTE_PENALTY`       | `0.03`  | Penalty per lost dispute            |
-| `ATTESTATION_TTL_HOURS` | `12`    | Default attestation validity window |
+| Environment Variable                            | Default | Description                                                          |
+| ----------------------------------------------- | ------- | -------------------------------------------------------------------- |
+| `SCORE_HALF_LIFE_DAYS`                          | `90`    | Exponential decay half-life in days                                  |
+| `DISPUTE_PENALTY`                               | `0.03`  | Penalty per lost dispute                                             |
+| `ATTESTATION_TTL_HOURS`                         | `12`    | Default attestation validity window                                  |
+| `ATTESTATION_CUMULATIVE_REVOCATION_THRESHOLD`   | `0.10`  | Cumulative score drop from issuance to trigger proactive revocation  |
+| `DISPUTE_FILER_DAILY_CAP`                       | `10`    | Max new disputes a single agent may file per 24-hour window          |
+| `DISPUTE_FILER_OPEN_CAP`                        | `30`    | Max open disputes a single agent may hold across all targets at once |
+| `SYBIL_BURST_24H_THRESHOLD`                     | `20`    | Agents in ±12h window triggering medium burst-registration signal    |
+| `SYBIL_BURST_7D_THRESHOLD`                      | `50`    | Agents in ±84h window triggering slow burst-registration signal      |
+| `SYBIL_REPORT_VELOCITY_THRESHOLD`               | `50`    | Distinct negative reports per 24h triggering velocity Sybil signal   |
 
 The `DISPUTE_PENALTY` value maps directly to `dispute_penalty_per` in `ScoreComputation`. Floor values and the dismissed-penalty rate are hardcoded constants in `score_engine.py`.

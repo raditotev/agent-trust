@@ -98,7 +98,7 @@ AgentTrust MCP Server
 
 | Tool               | Scope Required | Description                                                                       |
 | ------------------ | -------------- | --------------------------------------------------------------------------------- |
-| `sybil_check`      | none           | Run sybil detection checks (ring reporting, burst registration, delegation chain) |
+| `sybil_check`      | none           | Run sybil detection checks (ring/multi-hop reporting, burst registration across 1h/24h/7d windows, reporting velocity, delegation chain) |
 | `subscribe_alerts` | trust.admin    | Subscribe to score change notifications                                           |
 
 ## MCP Resources
@@ -149,11 +149,17 @@ AgentTrust uses a **Bayesian Beta distribution** model:
 | `AGENTAUTH_ACCESS_TOKEN` | —                                | Bearer token for AgentAuth MCP calls                    |
 | `SCORE_HALF_LIFE_DAYS`   | `90`                             | Score decay half-life in days                           |
 | `DISPUTE_PENALTY`        | `0.03`                           | Per-upheld-dispute score penalty                        |
+| `DISPUTE_FILER_DAILY_CAP`    | `10`   | Max new disputes a single agent may file within any 24-hour window              |
+| `DISPUTE_FILER_OPEN_CAP`     | `30`   | Max open disputes a single agent may hold simultaneously across all targets     |
 | `ATTESTATION_TTL_HOURS`  | `12`                             | Default attestation validity period                     |
+| `ATTESTATION_CUMULATIVE_REVOCATION_THRESHOLD` | `0.10` | Cumulative score drop from attestation issuance score that triggers revocation |
 | `MCP_TRANSPORT`          | `stdio`                          | `stdio` \| `streamable-http`                            |
 | `MCP_PORT`               | `8000`                           | Port for streamable-http transport                      |
 | `LOG_LEVEL`              | `INFO`                           | Logging level                                           |
 | `JSON_LOGS`              | `false`                          | JSON log format (set `true` in production)              |
+| `SYBIL_BURST_24H_THRESHOLD`       | `20`  | Agents registered in the same ±12-hour window to trigger medium Sybil alert    |
+| `SYBIL_BURST_7D_THRESHOLD`        | `50`  | Agents registered in the same ±84-hour window to trigger slow Sybil alert      |
+| `SYBIL_REPORT_VELOCITY_THRESHOLD` | `50`  | Distinct negative reports by one agent in 24 hours to trigger velocity signal   |
 
 ## Rate Limits
 

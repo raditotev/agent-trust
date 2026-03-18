@@ -71,6 +71,12 @@ uv run alembic revision --autogenerate -m "msg" # new migration
 - SCORE_HALF_LIFE_DAYS: decay half-life (default: 90)
 - DISPUTE_PENALTY: per-dispute penalty (default: 0.03)
 - ATTESTATION_TTL_HOURS: default validity period (default: 24)
+- ATTESTATION_CUMULATIVE_REVOCATION_THRESHOLD: cumulative score drop from issuance to trigger attestation revocation (default: 0.10)
+- DISPUTE_FILER_DAILY_CAP: max disputes filed by one agent per 24h (default: 10)
+- DISPUTE_FILER_OPEN_CAP: max open disputes one agent may hold at once across all targets (default: 30)
+- SYBIL_BURST_24H_THRESHOLD: agents in ±12h window threshold for medium Sybil alert (default: 20)
+- SYBIL_BURST_7D_THRESHOLD: agents in ±84h window threshold for slow Sybil alert (default: 50)
+- SYBIL_REPORT_VELOCITY_THRESHOLD: distinct negative reports per 24h threshold for velocity signal (default: 50)
 - MCP_TRANSPORT: stdio | streamable-http (default: stdio)
 - MCP_PORT: port for streamable-http transport (default: 8000)
 

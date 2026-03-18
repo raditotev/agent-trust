@@ -55,16 +55,26 @@ async def test_ring_reporting_detection():
     incoming_result = MagicMock()
     incoming_result.scalar.return_value = 3  # 3 mutual reporters
 
+    # cycle check: no rows near agent
+    cycle_empty = MagicMock()
+    cycle_empty.fetchall.return_value = []
+
     # burst registration: agent not found (returns None)
     not_found = MagicMock()
     not_found.scalar_one_or_none.return_value = None
 
+    # velocity check: no negative reports
+    velocity_zero = MagicMock()
+    velocity_zero.scalar.return_value = 0
+
     session.execute = AsyncMock(
         side_effect=[
-            outgoing_result,  # outgoing reports
-            incoming_result,  # mutual count
-            not_found,  # burst check (agent not found)
-            not_found,  # delegation check
+            outgoing_result,  # ring: outgoing reports
+            incoming_result,  # ring: mutual count
+            cycle_empty,      # cycle: rows near agent (empty → returns None)
+            not_found,        # burst: agent registered_at (None → returns None)
+            not_found,        # delegation: parent (None → returns None)
+            velocity_zero,    # velocity: count (0 < threshold → returns None)
         ]
     )
 
@@ -93,15 +103,28 @@ async def test_burst_registration_detection():
     burst_result = MagicMock()
     burst_result.scalar.return_value = 12  # 11 others + self
 
+    under_threshold = MagicMock()
+    under_threshold.scalar.return_value = 1  # just self → burst_count=0 < threshold
+
     no_delegation = MagicMock()
     no_delegation.scalar_one_or_none.return_value = None
 
+    cycle_empty = MagicMock()
+    cycle_empty.fetchall.return_value = []
+
+    velocity_zero = MagicMock()
+    velocity_zero.scalar.return_value = 0
+
     session.execute = AsyncMock(
         side_effect=[
-            no_outgoing,  # ring: outgoing
-            created_result,  # burst: agent created_at
-            burst_result,  # burst: count
-            no_delegation,  # delegation: parent
+            no_outgoing,      # ring: outgoing (empty → returns None)
+            cycle_empty,      # cycle: rows near agent (empty → returns None)
+            created_result,   # burst: agent registered_at
+            burst_result,     # burst: count ±1hr (12 → 11 ≥ 5 → triggers)
+            under_threshold,  # burst: count ±12hr (1 → 0 < 20 → no trigger)
+            under_threshold,  # burst: count ±84hr (1 → 0 < 50 → no trigger)
+            no_delegation,    # delegation: parent (None → returns None)
+            velocity_zero,    # velocity: count (0 < threshold → returns None)
         ]
     )
 

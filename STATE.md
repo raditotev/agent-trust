@@ -29,7 +29,7 @@ All 23 tasks across 5 phases implemented and tested.
 ## Phase 4: Advanced ✅
 - MCP prompts: evaluate_counterparty (PROCEED/CAUTION/DECLINE), explain_score_change, dispute_assessment
 - subscribe_alerts (trust.admin scope) + alert_dispatcher worker (delta-threshold notifications)
-- SybilDetector: ring_reporting (mutual positive loops), burst_registration (5+ in 2h), delegation_chain (depth>3)
+- SybilDetector: ring_reporting (mutual + multi-hop BFS cycles up to 6 hops), burst_registration (3 windows: 1h/24h/7d), reporting_velocity (>50 distinct negatives/24h), delegation_chain (depth>3)
 - Redis sliding-window rate limiting: root=300, delegated=120, standalone=60, ephemeral=30, anon=10 req/min
 
 ## Phase 5: Polish ✅
@@ -39,8 +39,17 @@ All 23 tasks across 5 phases implemented and tested.
 - README.md: comprehensive docs with tools, resources, prompts, score algorithm, env vars
 - Dockerfile + docker-compose full stack (postgres, redis, agent-trust, worker)
 
+## Security Hardening ✅
+Five rogue-agent attack vectors identified in threat model (docs/reports/20260318-03-audit-report.md) and resolved:
+
+- **Slow Sybil Army** — burst_registration now checks 3 windows (±1h/±12h/±84h, thresholds 5/20/50). Multi-hop BFS ring detection (A→B→C→D→A chains up to 6 hops) added alongside the existing mutual-pair check.
+- **Trust Amplification / Score Bomb** — new `reporting_velocity` Sybil signal fires when an agent files ≥50 distinct failure/timeout reports in 24 hours. `report_interaction` returns a `warnings` field when the threshold is exceeded.
+- **Attestation Race Window** — revocation now compares each attestation's `score_snapshot` issuance score against the current score. Cumulative drops across multiple cycles (e.g. 0.95→0.87→0.79) now correctly trigger revocation. Threshold configurable via `ATTESTATION_CUMULATIVE_REVOCATION_THRESHOLD`.
+- **Dispute Harassment Campaign** — per-filer daily cap (10 disputes/24h) and per-filer open cap (30 open disputes across all targets) added. Configurable via `DISPUTE_FILER_DAILY_CAP` and `DISPUTE_FILER_OPEN_CAP`.
+- **Context Field Prompt Injection** — `_scan_for_injection()` added to detect 14 adversarial patterns in context JSONB. `report_interaction` and `get_interaction_history` return `warnings`/`context_warnings` on hits. Writes are never blocked.
+
 ## Test Coverage
-136+ tests across:
+246+ tests across:
 - tests/test_auth/ — AgentAuth provider, standalone, cache
 - tests/test_engine/ — score algorithm (property-based), workers, crypto, sybil detection
 - tests/test_tools/ — all 16 tools, prompts, alert subscriptions

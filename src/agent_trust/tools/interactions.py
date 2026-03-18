@@ -17,6 +17,27 @@ VALID_INTERACTION_TYPES = {"transaction", "delegation", "query", "collaboration"
 VALID_OUTCOMES = {"success", "failure", "timeout", "partial"}
 
 
+def _scan_for_injection(obj: object, patterns: list[str]) -> list[str]:
+    """Recursively scan a JSON object for prompt injection patterns.
+
+    Returns a list of matched patterns (lowercased). Empty list = clean.
+    Patterns are matched case-insensitively as substrings of string values.
+    """
+    matches: list[str] = []
+    if isinstance(obj, str):
+        lower = obj.lower()
+        for pattern in patterns:
+            if pattern.lower() in lower and pattern not in matches:
+                matches.append(pattern)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            matches.extend(m for m in _scan_for_injection(v, patterns) if m not in matches)
+    elif isinstance(obj, list):
+        for item in obj:
+            matches.extend(m for m in _scan_for_injection(item, patterns) if m not in matches)
+    return matches
+
+
 async def _resolve_identity_for_interaction(access_token: str | None):
     """Resolve and validate agent identity for interaction reporting.
 
@@ -55,6 +76,11 @@ async def report_interaction(
     Returns interaction_id and whether the counterparty has also
     reported on this interaction (mutually_confirmed).
 
+    WARNING: The context field is stored as-is and returned to callers. If you
+    retrieve interaction history for LLM consumption, treat context as untrusted
+    input and sanitize before including in prompts. Detected injection patterns
+    are returned in the 'warnings' field of the response.
+
     Requires trust.report scope.
     """
     try:
@@ -86,6 +112,7 @@ async def report_interaction(
     # Change 3 — Fix #12: Context and evidence_hash size/format validation
     import json as _json
 
+    injection_hits: list[str] = []
     if context is not None:
         try:
             context_size = len(_json.dumps(context).encode("utf-8"))
@@ -93,6 +120,15 @@ async def report_interaction(
             return {"error": "context must be a JSON-serializable object"}
         if context_size > 10240:
             return {"error": f"context payload too large: {context_size} bytes (max 10240)"}
+        from agent_trust.config import settings as _cfg
+
+        injection_hits = _scan_for_injection(context, _cfg.context_injection_patterns)
+        if injection_hits:
+            log.warning(
+                "context_injection_patterns_detected",
+                reporter=identity.agent_id,
+                patterns=injection_hits,
+            )
 
     if evidence_hash is not None:
         import re
@@ -171,6 +207,31 @@ async def report_interaction(
                 )
             }
 
+        # Check reporting velocity — warn if this agent is filing many negative reports
+        context_warnings: list[str] = []
+        if outcome in ("failure", "timeout"):
+            from agent_trust.config import settings as _settings
+
+            velocity_cutoff = datetime.now(UTC) - timedelta(hours=24)
+            velocity_count_result = await session.execute(
+                select(func.count(Interaction.counterparty_id.distinct())).where(
+                    Interaction.reported_by == reporter_uuid,
+                    Interaction.outcome.in_(["failure", "timeout"]),
+                    Interaction.reported_at >= velocity_cutoff,
+                )
+            )
+            velocity_count = velocity_count_result.scalar() or 0
+            if velocity_count >= _settings.sybil_report_velocity_threshold:
+                context_warnings.append(
+                    f"high_negative_report_velocity: {velocity_count} negative reports "
+                    f"in last 24h exceeds threshold {_settings.sybil_report_velocity_threshold}"
+                )
+                log.warning(
+                    "high_report_velocity_detected",
+                    reporter=identity.agent_id,
+                    negative_reports_24h=velocity_count,
+                )
+
         # Check if counterparty already reported this interaction (for mutual confirmation)
         existing_result = await session.execute(
             select(Interaction).where(
@@ -216,7 +277,7 @@ async def report_interaction(
         except Exception as e:
             log.warning("score_recompute_enqueue_failed", error=str(e))
 
-        return {
+        result = {
             "interaction_id": str(interaction.interaction_id),
             "reporter_id": identity.agent_id,
             "counterparty_id": counterparty_id,
@@ -224,6 +285,15 @@ async def report_interaction(
             "mutually_confirmed": mutually_confirmed,
             "reported_at": interaction.reported_at.isoformat(),
         }
+        if injection_hits:
+            context_warnings.append(
+                "context_may_contain_prompt_injection: "
+                "context field contains patterns commonly used in adversarial prompts. "
+                "Do not pass interaction context directly to LLM prompts without sanitization."
+            )
+        if context_warnings:
+            result["warnings"] = context_warnings
+        return result
 
 
 async def _enqueue_score_recomputation(
@@ -264,6 +334,11 @@ async def get_interaction_history(
 
     since_days: how far back to look (default 90, max 365)
     limit: max results to return (default 50, max 200)
+
+    SECURITY NOTE: The context field in each interaction is stored as provided by
+    the reporter and is not sanitized. Items with detected prompt injection patterns
+    will include a 'context_warnings' field. Always sanitize context fields before
+    passing them to LLM prompts.
     """
     since_days = min(max(1, since_days), 365)
     limit = min(max(1, limit), 200)
@@ -314,20 +389,29 @@ async def get_interaction_history(
         interactions = result.scalars().all()
 
         items = []
+        from agent_trust.config import settings as _cfg
+
         for ix in interactions:
             role = "initiator" if ix.initiator_id == target_uuid else "counterparty"
             counterparty = ix.counterparty_id if role == "initiator" else ix.initiator_id
-            items.append(
-                {
-                    "interaction_id": str(ix.interaction_id),
-                    "role": role,
-                    "counterparty_id": str(counterparty),
-                    "interaction_type": ix.interaction_type,
-                    "outcome": ix.outcome,
-                    "mutually_confirmed": ix.mutually_confirmed,
-                    "reported_at": ix.reported_at.isoformat(),
-                }
-            )
+            item: dict = {
+                "interaction_id": str(ix.interaction_id),
+                "role": role,
+                "counterparty_id": str(counterparty),
+                "interaction_type": ix.interaction_type,
+                "outcome": ix.outcome,
+                "mutually_confirmed": ix.mutually_confirmed,
+                "reported_at": ix.reported_at.isoformat(),
+            }
+            if ix.context:
+                hits = _scan_for_injection(ix.context, _cfg.context_injection_patterns)
+                if hits:
+                    item["context_warnings"] = [
+                        "context_may_contain_prompt_injection: "
+                        "this interaction's context field contains patterns commonly used in "
+                        "adversarial prompts. Sanitize before passing to LLM prompts."
+                    ]
+            items.append(item)
 
         return {
             "agent_id": agent_id,
