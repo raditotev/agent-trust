@@ -77,12 +77,7 @@ def is_standalone_agent_token(token: str) -> bool:
         # Normalise aud — PyJWT may return a list when verifying but a string here
         if isinstance(aud, list):
             aud = aud[0] if aud else ""
-        return (
-            bool(sub)
-            and sub == iss
-            and aud == STANDALONE_TOKEN_AUDIENCE
-            and _is_uuid(sub)
-        )
+        return bool(sub) and sub == iss and aud == STANDALONE_TOKEN_AUDIENCE and _is_uuid(sub)
     except Exception:
         return False
 

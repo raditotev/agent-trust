@@ -63,6 +63,19 @@ async def file_dispute(
             "retry_after_seconds": rl_result.retry_after,
         }
 
+    if len(reason) > 5000:
+        return {"error": "reason too long: maximum 5000 characters"}
+
+    if evidence is not None:
+        try:
+            import json as _json
+
+            evidence_size = len(_json.dumps(evidence).encode("utf-8"))
+        except (TypeError, ValueError):
+            return {"error": "evidence must be a JSON-serializable object"}
+        if evidence_size > 10240:
+            return {"error": f"evidence payload too large: {evidence_size} bytes (max 10240)"}
+
     try:
         interaction_uuid = uuid.UUID(interaction_id)
         filer_uuid = uuid.UUID(identity.agent_id)
@@ -130,6 +143,24 @@ async def file_dispute(
             if filer_uuid == interaction.initiator_id
             else interaction.initiator_id
         )
+
+        open_count_result = await session.execute(
+            select(func.count())
+            .select_from(Dispute)
+            .where(
+                Dispute.filed_against == filed_against_uuid,
+                Dispute.status == "open",
+            )
+        )
+        open_count = open_count_result.scalar() or 0
+        if open_count >= 10:
+            return {
+                "error": (
+                    "Maximum open disputes (10) already filed against this agent. "
+                    "Wait for existing disputes to be resolved."
+                ),
+                "open_dispute_count": open_count,
+            }
 
         existing_result = await session.execute(
             select(Dispute).where(
@@ -215,6 +246,9 @@ async def resolve_dispute(
 
     if resolution not in VALID_RESOLUTIONS:
         return {"error": f"Invalid resolution. Must be one of: {sorted(VALID_RESOLUTIONS)}"}
+
+    if resolution_note is not None and len(resolution_note) > 2000:
+        return {"error": "resolution_note too long: maximum 2000 characters"}
 
     try:
         dispute_uuid = uuid.UUID(dispute_id)

@@ -10,7 +10,12 @@ import pytest
 from agent_trust.auth.identity import AgentIdentity
 from agent_trust.crypto.jwt import sign_attestation, verify_attestation_jwt
 from agent_trust.crypto.keys import generate_ed25519_keypair
+from agent_trust.ratelimit import RateLimitResult
 from agent_trust.tools.attestations import issue_attestation, verify_attestation
+
+_RATE_LIMIT_ALLOWED = RateLimitResult(
+    allowed=True, limit=120, remaining=119, reset_at=9_999_999_999
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -122,12 +127,18 @@ class TestIssueAttestation:
                 "agent_trust.tools.attestations.AgentAuthProvider",
                 return_value=MagicMock(authenticate=AsyncMock(return_value=identity)),
             ),
-            patch("agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())),
+            patch(
+                "agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())
+            ),
             patch(
                 "agent_trust.tools.attestations.get_session",
                 return_value=_fake_session_ctx(session),
             ),
             patch("agent_trust.tools.attestations.sign_attestation", return_value=fake_token),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await issue_attestation(
                 agent_id=_SUBJECT_ID,
@@ -150,12 +161,18 @@ class TestIssueAttestation:
                 "agent_trust.tools.attestations.AgentAuthProvider",
                 return_value=MagicMock(authenticate=AsyncMock(return_value=identity)),
             ),
-            patch("agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())),
+            patch(
+                "agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())
+            ),
         ):
             result = await issue_attestation(agent_id=_SUBJECT_ID, access_token="tok")
 
         assert "error" in result
-        assert "scope" in result["error"].lower() or "permission" in result["error"].lower() or "trust.attest.issue" in result["error"]
+        assert (
+            "scope" in result["error"].lower()
+            or "permission" in result["error"].lower()
+            or "trust.attest.issue" in result["error"]
+        )
 
     @pytest.mark.asyncio
     async def test_issue_attestation_agent_not_found(self):
@@ -167,10 +184,16 @@ class TestIssueAttestation:
                 "agent_trust.tools.attestations.AgentAuthProvider",
                 return_value=MagicMock(authenticate=AsyncMock(return_value=identity)),
             ),
-            patch("agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())),
+            patch(
+                "agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())
+            ),
             patch(
                 "agent_trust.tools.attestations.get_session",
                 return_value=_fake_session_ctx(session),
+            ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
             ),
         ):
             result = await issue_attestation(agent_id=_SUBJECT_ID, access_token="tok")
@@ -190,7 +213,9 @@ class TestIssueAttestation:
                 "agent_trust.tools.attestations.AgentAuthProvider",
                 return_value=MagicMock(authenticate=AsyncMock(return_value=identity)),
             ),
-            patch("agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())),
+            patch(
+                "agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())
+            ),
             patch(
                 "agent_trust.tools.attestations.get_session",
                 return_value=_fake_session_ctx(session),
@@ -198,6 +223,10 @@ class TestIssueAttestation:
             patch(
                 "agent_trust.tools.attestations.sign_attestation",
                 side_effect=FileNotFoundError("keys/service.key not found"),
+            ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
             ),
         ):
             result = await issue_attestation(agent_id=_SUBJECT_ID, access_token="tok")
@@ -214,7 +243,13 @@ class TestIssueAttestation:
                 "agent_trust.tools.attestations.AgentAuthProvider",
                 return_value=MagicMock(authenticate=AsyncMock(return_value=identity)),
             ),
-            patch("agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())),
+            patch(
+                "agent_trust.tools.attestations.get_redis", new=AsyncMock(return_value=MagicMock())
+            ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await issue_attestation(agent_id="not-a-uuid", access_token="tok")
 

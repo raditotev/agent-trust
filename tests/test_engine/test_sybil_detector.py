@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -59,12 +59,14 @@ async def test_ring_reporting_detection():
     not_found = MagicMock()
     not_found.scalar_one_or_none.return_value = None
 
-    session.execute = AsyncMock(side_effect=[
-        outgoing_result,  # outgoing reports
-        incoming_result,  # mutual count
-        not_found,        # burst check (agent not found)
-        not_found,        # delegation check
-    ])
+    session.execute = AsyncMock(
+        side_effect=[
+            outgoing_result,  # outgoing reports
+            incoming_result,  # mutual count
+            not_found,  # burst check (agent not found)
+            not_found,  # delegation check
+        ]
+    )
 
     detector = SybilDetector(session)
     report = await detector.check_agent(str(uuid.uuid4()))
@@ -94,12 +96,14 @@ async def test_burst_registration_detection():
     no_delegation = MagicMock()
     no_delegation.scalar_one_or_none.return_value = None
 
-    session.execute = AsyncMock(side_effect=[
-        no_outgoing,     # ring: outgoing
-        created_result,  # burst: agent created_at
-        burst_result,    # burst: count
-        no_delegation,   # delegation: parent
-    ])
+    session.execute = AsyncMock(
+        side_effect=[
+            no_outgoing,  # ring: outgoing
+            created_result,  # burst: agent created_at
+            burst_result,  # burst: count
+            no_delegation,  # delegation: parent
+        ]
+    )
 
     detector = SybilDetector(session)
     report = await detector.check_agent(agent_id)
@@ -131,4 +135,3 @@ async def test_is_high_risk_threshold():
     )
     assert report.is_suspicious
     assert report.is_high_risk
-

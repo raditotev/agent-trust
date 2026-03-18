@@ -19,9 +19,7 @@ from agent_trust.tools.scoring import check_trust, compare_agents, get_score_bre
 _AGENT_A = str(uuid.uuid4())
 _AGENT_B = str(uuid.uuid4())
 
-_RATE_LIMIT_ALLOWED = RateLimitResult(
-    allowed=True, limit=60, remaining=59, reset_at=9_999_999_999
-)
+_RATE_LIMIT_ALLOWED = RateLimitResult(allowed=True, limit=60, remaining=59, reset_at=9_999_999_999)
 
 
 def _make_identity(agent_id: str = _AGENT_A, scopes: list[str] | None = None) -> AgentIdentity:
@@ -72,8 +70,10 @@ async def _fake_session_ctx(session_mock):
 
 def _session_factory(session_mock):
     """Return a side_effect callable that yields a fresh ctx manager each call."""
+
     def _factory():
         return _fake_session_ctx(session_mock)
+
     return _factory
 
 

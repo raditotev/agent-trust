@@ -54,8 +54,7 @@ async def test_all_success_interactions_high_score(engine: ScoreComputation) -> 
     # agent_id is the reporter, counterparty_id is the counterparty
     # Counterparty gets full credit (α += w) for success
     interactions = [
-        make_interaction(agent_id, counterparty_id, outcome="success")
-        for _ in range(20)
+        make_interaction(agent_id, counterparty_id, outcome="success") for _ in range(20)
     ]
 
     engine._fetch_interactions = AsyncMock(return_value=interactions)
@@ -341,8 +340,7 @@ async def test_dismissed_dispute_penalizes_filer(engine: ScoreComputation) -> No
     counterparty_id = uuid.uuid4()
 
     interactions = [
-        make_interaction(agent_id, counterparty_id, outcome="success")
-        for _ in range(10)
+        make_interaction(agent_id, counterparty_id, outcome="success") for _ in range(10)
     ]
 
     engine._fetch_interactions = AsyncMock(return_value=interactions)
@@ -369,8 +367,7 @@ async def test_dismissed_penalty_floored_at_90_percent(engine: ScoreComputation)
     counterparty_id = uuid.uuid4()
 
     interactions = [
-        make_interaction(agent_id, counterparty_id, outcome="success")
-        for _ in range(20)
+        make_interaction(agent_id, counterparty_id, outcome="success") for _ in range(20)
     ]
 
     engine._fetch_interactions = AsyncMock(return_value=interactions)

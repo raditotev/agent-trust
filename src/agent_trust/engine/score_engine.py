@@ -140,7 +140,7 @@ class ScoreComputation:
             dismissed_penalty = 1.0
         else:
             total_reduction = sum(
-                self.dismissed_penalty_per * (1.5 ** i) for i in range(dismissed_filed)
+                self.dismissed_penalty_per * (1.5**i) for i in range(dismissed_filed)
             )
             dismissed_penalty = max(1.0 - total_reduction, self.dismissed_penalty_floor)
         score = score * dismissed_penalty
@@ -313,7 +313,8 @@ class ScoreComputation:
                 (
                     (Interaction.initiator_id == agent_id)
                     & (Interaction.counterparty_id == reporter_id)
-                ) | (
+                )
+                | (
                     (Interaction.initiator_id == reporter_id)
                     & (Interaction.counterparty_id == agent_id)
                 ),

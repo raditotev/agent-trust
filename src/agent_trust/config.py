@@ -23,6 +23,16 @@ class Settings(BaseSettings):
 
     # Signing key
     signing_key_path: str = "keys/service.key"
+    signing_key_password: str = (
+        ""  # Password for encrypting Ed25519 signing key (empty = unencrypted for dev)
+    )
+
+    # Environment
+    environment: str = "development"  # "development" or "production"
+
+    # TLS (for streamable-http transport)
+    tls_cert_path: str = ""  # Path to TLS certificate PEM file
+    tls_key_path: str = ""  # Path to TLS private key PEM file
 
     # Scoring parameters
     score_half_life_days: float = 90.0

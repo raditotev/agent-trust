@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_trust.workers.attestation_expiry import expire_attestations
-from agent_trust.workers.decay_refresh import refresh_all_scores
 from agent_trust.workers.score_recomputer import recompute_score
 from tests.factories import make_trust_score
 
@@ -32,7 +31,10 @@ async def test_recompute_score_success():
         patch("agent_trust.workers.score_recomputer.get_session", return_value=mock_ctx),
         patch("agent_trust.workers.score_recomputer.ScoreComputation", return_value=mock_engine),
         patch("agent_trust.workers.score_recomputer.upsert_trust_score", new=AsyncMock()),
-        patch("agent_trust.workers.score_recomputer.get_redis", return_value=AsyncMock(return_value=mock_redis)),
+        patch(
+            "agent_trust.workers.score_recomputer.get_redis",
+            return_value=AsyncMock(return_value=mock_redis),
+        ),
     ):
         result = await recompute_score({}, agent_id)
 

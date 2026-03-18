@@ -21,9 +21,7 @@ _RESOLVER_ID = str(uuid.uuid4())
 _INTERACTION_ID = str(uuid.uuid4())
 _DISPUTE_ID = str(uuid.uuid4())
 
-_RATE_LIMIT_ALLOWED = RateLimitResult(
-    allowed=True, limit=60, remaining=59, reset_at=9_999_999_999
-)
+_RATE_LIMIT_ALLOWED = RateLimitResult(allowed=True, limit=60, remaining=59, reset_at=9_999_999_999)
 
 
 def _make_identity(
@@ -67,7 +65,7 @@ async def _fake_session_ctx(session_mock):
 
 def _make_session(*scalar_results):
     """Return a session mock that cycles through scalar_results per execute call.
-    
+
     Returns results via both .scalar() and .scalar_one_or_none() for compatibility.
     """
     session = MagicMock()
@@ -104,9 +102,13 @@ async def test_file_dispute_success():
     provider.authenticate = AsyncMock(return_value=_make_identity())
 
     with (
-        patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
+        patch(
+            "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+        ),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
-        patch("agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)),
+        patch(
+            "agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)
+        ),
     ):
         result = await file_dispute(
             interaction_id=_INTERACTION_ID,
@@ -122,11 +124,11 @@ async def test_file_dispute_success():
 @pytest.mark.asyncio
 async def test_file_dispute_requires_scope():
     provider = MagicMock()
-    provider.authenticate = AsyncMock(
-        return_value=_make_identity(scopes=["trust.read"])
-    )
+    provider.authenticate = AsyncMock(return_value=_make_identity(scopes=["trust.read"]))
 
-    with patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)):
+    with patch(
+        "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+    ):
         result = await file_dispute(
             interaction_id=_INTERACTION_ID,
             reason="reason",
@@ -149,9 +151,13 @@ async def test_file_dispute_not_a_party():
     provider.authenticate = AsyncMock(return_value=_make_identity(agent_id=other_id))
 
     with (
-        patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
+        patch(
+            "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+        ),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
-        patch("agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)),
+        patch(
+            "agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)
+        ),
     ):
         result = await file_dispute(
             interaction_id=_INTERACTION_ID,
@@ -172,9 +178,13 @@ async def test_file_dispute_interaction_not_found():
     provider.authenticate = AsyncMock(return_value=_make_identity())
 
     with (
-        patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
+        patch(
+            "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+        ),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
-        patch("agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)),
+        patch(
+            "agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)
+        ),
     ):
         result = await file_dispute(
             interaction_id=_INTERACTION_ID,
@@ -190,16 +200,20 @@ async def test_file_dispute_interaction_not_found():
 async def test_file_dispute_duplicate_open():
     interaction = _make_interaction()
     existing_dispute = _make_dispute(status="open")
-    # Query sequence: dismissed_count, last_dismissed_at, interaction, existing_dispute
-    session = _make_session(0, None, interaction, existing_dispute)
+    # Query sequence: dismissed_count, last_dismissed_at, interaction, open_count, existing_dispute
+    session = _make_session(0, None, interaction, 0, existing_dispute)
 
     provider = MagicMock()
     provider.authenticate = AsyncMock(return_value=_make_identity())
 
     with (
-        patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
+        patch(
+            "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+        ),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
-        patch("agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)),
+        patch(
+            "agent_trust.ratelimit.check_rate_limit", AsyncMock(return_value=_RATE_LIMIT_ALLOWED)
+        ),
     ):
         result = await file_dispute(
             interaction_id=_INTERACTION_ID,
@@ -230,7 +244,9 @@ async def test_resolve_dispute_success():
     provider.check_permission = AsyncMock(return_value=True)
 
     with (
-        patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
+        patch(
+            "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+        ),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
         patch("agent_trust.tools.disputes._enqueue_dispute_recomputation", AsyncMock()),
     ):
@@ -249,11 +265,11 @@ async def test_resolve_dispute_success():
 @pytest.mark.asyncio
 async def test_resolve_dispute_requires_scope():
     provider = MagicMock()
-    provider.authenticate = AsyncMock(
-        return_value=_make_identity(scopes=["trust.read"])
-    )
+    provider.authenticate = AsyncMock(return_value=_make_identity(scopes=["trust.read"]))
 
-    with patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)):
+    with patch(
+        "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+    ):
         result = await resolve_dispute(
             dispute_id=_DISPUTE_ID,
             resolution="upheld",
@@ -274,7 +290,9 @@ async def test_resolve_dispute_requires_agentauth_permission():
     provider.authenticate = AsyncMock(return_value=resolver_identity)
     provider.check_permission = AsyncMock(return_value=False)  # AgentAuth denies
 
-    with patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)):
+    with patch(
+        "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+    ):
         result = await resolve_dispute(
             dispute_id=_DISPUTE_ID,
             resolution="upheld",
@@ -295,7 +313,9 @@ async def test_resolve_dispute_invalid_resolution():
     provider.authenticate = AsyncMock(return_value=resolver_identity)
     provider.check_permission = AsyncMock(return_value=True)
 
-    with patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)):
+    with patch(
+        "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+    ):
         result = await resolve_dispute(
             dispute_id=_DISPUTE_ID,
             resolution="invalid_value",
@@ -319,7 +339,9 @@ async def test_resolve_dispute_not_found():
     provider.check_permission = AsyncMock(return_value=True)
 
     with (
-        patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
+        patch(
+            "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+        ),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
     ):
         result = await resolve_dispute(
@@ -346,7 +368,9 @@ async def test_resolve_dispute_already_resolved():
     provider.check_permission = AsyncMock(return_value=True)
 
     with (
-        patch("agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)),
+        patch(
+            "agent_trust.tools.disputes._get_agentauth_provider", AsyncMock(return_value=provider)
+        ),
         patch("agent_trust.tools.disputes.get_session", return_value=_fake_session_ctx(session)),
     ):
         result = await resolve_dispute(

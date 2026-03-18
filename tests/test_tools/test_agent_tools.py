@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,6 +8,7 @@ import pytest
 
 from agent_trust.auth.identity import AgentIdentity, AuthenticationError
 from agent_trust.auth.standalone import STANDALONE_SCOPES
+from agent_trust.ratelimit import RateLimitResult
 from agent_trust.tools.agents import (
     get_agent_profile,
     link_agentauth,
@@ -22,6 +24,8 @@ from agent_trust.tools.agents import (
 _AGENT_SCOPES = ["trust.read", "trust.report", "trust.dispute.file"]
 _AA_AGENT_ID = str(uuid.uuid4())
 _STANDALONE_AGENT_ID = str(uuid.uuid4())
+
+_RATE_LIMIT_ALLOWED = RateLimitResult(allowed=True, limit=60, remaining=59, reset_at=9_999_999_999)
 
 
 def _make_identity(agent_id: str = _AA_AGENT_ID, source: str = "agentauth") -> AgentIdentity:
@@ -79,6 +83,10 @@ class TestRegisterAgent:
                 "agent_trust.tools.agents._ensure_agent_profile",
                 new=AsyncMock(return_value=(agent, True)),
             ),
+            patch(
+                "agent_trust.tools.agents.check_rate_limit",
+                new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await register_agent(access_token="tok")
 
@@ -93,9 +101,15 @@ class TestRegisterAgent:
         agent_id = str(uuid.uuid4())
         agent = _make_agent(agent_id, source="standalone")
 
-        with patch(
-            "agent_trust.tools.agents._ensure_agent_profile",
-            new=AsyncMock(return_value=(agent, True)),
+        with (
+            patch(
+                "agent_trust.tools.agents._ensure_agent_profile",
+                new=AsyncMock(return_value=(agent, True)),
+            ),
+            patch(
+                "agent_trust.tools.agents.check_rate_limit",
+                new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await register_agent(public_key_hex="ab" * 32)
 
@@ -118,6 +132,10 @@ class TestRegisterAgent:
                 "agent_trust.tools.agents._ensure_agent_profile",
                 new=AsyncMock(return_value=(agent, False)),
             ),
+            patch(
+                "agent_trust.tools.agents.check_rate_limit",
+                new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             result = await register_agent(access_token="tok")
 
@@ -136,6 +154,10 @@ class TestRegisterAgent:
                 "agent_trust.tools.agents._ensure_agent_profile",
                 new=AsyncMock(return_value=(agent, True)),
             ),
+            patch(
+                "agent_trust.tools.agents.check_rate_limit",
+                new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
         ):
             mock_settings.auth_provider = "both"
             result = await register_agent(display_name="auto-agent")
@@ -151,7 +173,13 @@ class TestRegisterAgent:
     @pytest.mark.asyncio
     async def test_register_agent_no_auth_raises_when_agentauth_only(self):
         """No token, no key → AuthenticationError when auth_provider=agentauth."""
-        with patch("agent_trust.tools.agents.settings") as mock_settings:
+        with (
+            patch("agent_trust.tools.agents.settings") as mock_settings,
+            patch(
+                "agent_trust.tools.agents.check_rate_limit",
+                new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+            ),
+        ):
             mock_settings.auth_provider = "agentauth"
             with pytest.raises(AuthenticationError):
                 await register_agent()
@@ -159,8 +187,12 @@ class TestRegisterAgent:
     @pytest.mark.asyncio
     async def test_register_agent_invalid_hex_raises(self):
         """Invalid hex key → AuthenticationError."""
-        with pytest.raises(AuthenticationError, match="Invalid public_key_hex"):
-            await register_agent(public_key_hex="not-valid-hex!!")
+        with patch(
+            "agent_trust.tools.agents.check_rate_limit",
+            new=AsyncMock(return_value=_RATE_LIMIT_ALLOWED),
+        ):
+            with pytest.raises(AuthenticationError, match="Invalid public_key_hex"):
+                await register_agent(public_key_hex="not-valid-hex!!")
 
 
 # ---------------------------------------------------------------------------
@@ -172,9 +204,20 @@ class TestLinkAgentauth:
     @pytest.mark.asyncio
     async def test_link_agentauth_success(self):
         """Standalone profile is updated with AgentAuth identity."""
+        import jwt as pyjwt
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        private_key = Ed25519PrivateKey.generate()
+        public_key_hex = private_key.public_key().public_bytes_raw().hex()
+        signed_proof = pyjwt.encode(
+            {"sub": public_key_hex, "action": "link_agentauth", "iat": int(time.time())},
+            private_key,
+            algorithm="EdDSA",
+        )
+
         aa_identity = _make_identity(_AA_AGENT_ID, source="agentauth")
         standalone_agent = _make_agent(_STANDALONE_AGENT_ID, source="standalone")
-        standalone_agent.public_key = bytes.fromhex("cd" * 32)
+        standalone_agent.public_key = bytes.fromhex(public_key_hex)
         standalone_agent.agent_id = uuid.UUID(_STANDALONE_AGENT_ID)
 
         mock_session = AsyncMock()
@@ -193,7 +236,9 @@ class TestLinkAgentauth:
             patch("agent_trust.tools.agents.get_redis", new=AsyncMock(return_value=AsyncMock())),
             patch("agent_trust.tools.agents.get_session", return_value=mock_ctx),
         ):
-            result = await link_agentauth(access_token="tok", public_key_hex="cd" * 32)
+            result = await link_agentauth(
+                access_token="tok", public_key_hex=public_key_hex, signed_proof=signed_proof
+            )
 
         assert result["merged"] is True
         assert result["agentauth_id"] == _AA_AGENT_ID
@@ -201,6 +246,17 @@ class TestLinkAgentauth:
     @pytest.mark.asyncio
     async def test_link_agentauth_unknown_key_raises(self):
         """Unknown public key raises AuthenticationError."""
+        import jwt as pyjwt
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        private_key = Ed25519PrivateKey.generate()
+        public_key_hex = private_key.public_key().public_bytes_raw().hex()
+        signed_proof = pyjwt.encode(
+            {"sub": public_key_hex, "action": "link_agentauth", "iat": int(time.time())},
+            private_key,
+            algorithm="EdDSA",
+        )
+
         aa_identity = _make_identity(_AA_AGENT_ID)
 
         mock_session = AsyncMock()
@@ -220,7 +276,9 @@ class TestLinkAgentauth:
             patch("agent_trust.tools.agents.get_session", return_value=mock_ctx),
         ):
             with pytest.raises(AuthenticationError, match="No standalone agent"):
-                await link_agentauth(access_token="tok", public_key_hex="ab" * 32)
+                await link_agentauth(
+                    access_token="tok", public_key_hex=public_key_hex, signed_proof=signed_proof
+                )
 
 
 # ---------------------------------------------------------------------------

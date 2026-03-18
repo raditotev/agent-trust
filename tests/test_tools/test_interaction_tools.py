@@ -18,9 +18,7 @@ from agent_trust.tools.interactions import get_interaction_history, report_inter
 _REPORTER_ID = str(uuid.uuid4())
 _COUNTERPARTY_ID = str(uuid.uuid4())
 
-_RATE_LIMIT_ALLOWED = RateLimitResult(
-    allowed=True, limit=60, remaining=59, reset_at=9_999_999_999
-)
+_RATE_LIMIT_ALLOWED = RateLimitResult(allowed=True, limit=60, remaining=59, reset_at=9_999_999_999)
 
 
 def _make_identity(agent_id: str = _REPORTER_ID, scopes: list[str] | None = None) -> AgentIdentity:

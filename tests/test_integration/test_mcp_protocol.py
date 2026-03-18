@@ -103,6 +103,19 @@ def _make_orm_score(agent_id: uuid.UUID, score_type: str = "overall") -> MagicMo
     return s
 
 
+def _make_score_data(agent_id: uuid.UUID, score_type: str = "overall", score: float = 0.80) -> dict:
+    """Return a score dict matching what _get_or_compute_score returns."""
+    return {
+        "agent_id": str(agent_id),
+        "score_type": score_type,
+        "score": score,
+        "confidence": 0.90,
+        "interaction_count": 15,
+        "factor_breakdown": {"bayesian_raw": score, "dispute_penalty": 1.0},
+        "computed_at": datetime.now(UTC).isoformat(),
+    }
+
+
 def _make_orm_interaction(initiator_id: uuid.UUID, counterparty_id: uuid.UUID) -> MagicMock:
     i = MagicMock()
     i.interaction_id = uuid.uuid4()
@@ -206,9 +219,15 @@ class TestRegisterAgentMCP:
     async def test_autogen_keypair_when_no_auth(self, mcp_session):
         """No auth provided → auto-generates Ed25519 key pair (standalone mode)."""
         agent = _make_orm_agent()
-        with patch(
-            "agent_trust.tools.agents._ensure_agent_profile",
-            new=AsyncMock(return_value=(agent, True)),
+        with (
+            patch(
+                "agent_trust.tools.agents._ensure_agent_profile",
+                new=AsyncMock(return_value=(agent, True)),
+            ),
+            patch(
+                "agent_trust.tools.agents.check_rate_limit",
+                new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+            ),
         ):
             r = await mcp_session.call_tool("register_agent", {"display_name": "auto"})
 
@@ -225,9 +244,15 @@ class TestRegisterAgentMCP:
     async def test_standalone_path_with_public_key(self, mcp_session):
         """Providing public_key_hex registers via standalone path."""
         agent = _make_orm_agent()
-        with patch(
-            "agent_trust.tools.agents._ensure_agent_profile",
-            new=AsyncMock(return_value=(agent, True)),
+        with (
+            patch(
+                "agent_trust.tools.agents._ensure_agent_profile",
+                new=AsyncMock(return_value=(agent, True)),
+            ),
+            patch(
+                "agent_trust.tools.agents.check_rate_limit",
+                new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+            ),
         ):
             r = await mcp_session.call_tool("register_agent", {"public_key_hex": "ab" * 32})
 
@@ -252,6 +277,10 @@ class TestRegisterAgentMCP:
                 "agent_trust.tools.agents._ensure_agent_profile",
                 new=AsyncMock(return_value=(agent, True)),
             ),
+            patch(
+                "agent_trust.tools.agents.check_rate_limit",
+                new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+            ),
         ):
             r = await mcp_session.call_tool("register_agent", {"access_token": "valid-token"})
 
@@ -275,6 +304,10 @@ class TestRegisterAgentMCP:
                 "agent_trust.tools.agents._ensure_agent_profile",
                 new=AsyncMock(return_value=(agent, False)),
             ),
+            patch(
+                "agent_trust.tools.agents.check_rate_limit",
+                new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+            ),
         ):
             r = await mcp_session.call_tool("register_agent", {"access_token": "existing-token"})
 
@@ -285,7 +318,11 @@ class TestRegisterAgentMCP:
     @pytest.mark.asyncio
     async def test_invalid_public_key_hex(self, mcp_session):
         """Malformed hex string raises AuthenticationError → MCP isError=True."""
-        r = await mcp_session.call_tool("register_agent", {"public_key_hex": "not-valid-hex!!"})
+        with patch(
+            "agent_trust.tools.agents.check_rate_limit",
+            new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+        ):
+            r = await mcp_session.call_tool("register_agent", {"public_key_hex": "not-valid-hex!!"})
         assert r.isError
         assert "Invalid public_key_hex" in r.content[0].text
 
@@ -488,11 +525,24 @@ class TestGenerateAgentTokenMCP:
 class TestLinkAgentauthMCP:
     @pytest.mark.asyncio
     async def test_link_success(self, mcp_session):
+        import time
+
+        import jwt as pyjwt
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
         aa_identity = make_identity()
+
+        private_key = Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+        pub_hex = public_key.public_bytes_raw().hex()
+
         standalone_agent = _make_orm_agent()
         standalone_agent.agent_id = uuid.uuid4()
-        standalone_agent.public_key = bytes.fromhex("cd" * 32)
+        standalone_agent.public_key = bytes.fromhex(pub_hex)
         standalone_agent.agentauth_linked = False
+
+        proof_payload = {"sub": pub_hex, "action": "link_agentauth", "iat": int(time.time())}
+        signed_proof = pyjwt.encode(proof_payload, private_key, algorithm="EdDSA")
 
         session_ctx = make_session_ctx(standalone_agent)
         with (
@@ -505,7 +555,11 @@ class TestLinkAgentauthMCP:
         ):
             r = await mcp_session.call_tool(
                 "link_agentauth",
-                {"access_token": "tok", "public_key_hex": "cd" * 32},
+                {
+                    "access_token": "tok",
+                    "public_key_hex": pub_hex,
+                    "signed_proof": signed_proof,
+                },
             )
 
         assert not r.isError
@@ -1122,9 +1176,8 @@ class TestCheckTrustMCP:
     @pytest.mark.asyncio
     async def test_check_trust_success(self, mcp_session):
         agent = _make_orm_agent()
-        score = _make_orm_score(agent.agent_id)
-        # scoring uses get_session twice: once for agent, once for score
-        session_ctx = make_session_ctx(agent, score)
+        score_data = _make_score_data(agent.agent_id)
+        session_ctx = make_session_ctx(agent)
         with (
             patch("agent_trust.db.redis.get_redis", new=AsyncMock(return_value=make_mock_redis())),
             patch(
@@ -1132,6 +1185,10 @@ class TestCheckTrustMCP:
                 new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
             ),
             patch("agent_trust.tools.scoring.get_session", session_ctx),
+            patch(
+                "agent_trust.tools.scoring._get_or_compute_score",
+                new=AsyncMock(return_value=score_data),
+            ),
         ):
             r = await mcp_session.call_tool("check_trust", {"agent_id": str(agent.agent_id)})
 
@@ -1194,12 +1251,11 @@ class TestGetScoreBreakdownMCP:
     async def test_success_returns_all_score_types(self, mcp_session):
         identity = make_identity()
         agent = _make_orm_agent()
-        overall = _make_orm_score(agent.agent_id, "overall")
-        reliability = _make_orm_score(agent.agent_id, "reliability")
-        responsiveness = _make_orm_score(agent.agent_id, "responsiveness")
-        honesty = _make_orm_score(agent.agent_id, "honesty")
-        # agent lookup + 4 score lookups
-        session_ctx = make_session_ctx(agent, overall, reliability, responsiveness, honesty)
+        session_ctx = make_session_ctx(agent)
+
+        async def mock_get_or_compute(agent_id, score_type):
+            return _make_score_data(agent_id, score_type)
+
         with (
             patch("agent_trust.db.redis.get_redis", new=AsyncMock(return_value=make_mock_redis())),
             patch(
@@ -1207,6 +1263,10 @@ class TestGetScoreBreakdownMCP:
                 new=AsyncMock(return_value=identity),
             ),
             patch("agent_trust.tools.scoring.get_session", session_ctx),
+            patch(
+                "agent_trust.tools.scoring._get_or_compute_score",
+                new=AsyncMock(side_effect=mock_get_or_compute),
+            ),
         ):
             r = await mcp_session.call_tool(
                 "get_score_breakdown",
@@ -1255,11 +1315,23 @@ class TestCompareAgentsMCP:
     async def test_compare_two_agents(self, mcp_session):
         agent_a = _make_orm_agent()
         agent_b = _make_orm_agent()
-        score_a = _make_orm_score(agent_a.agent_id)
-        score_b = _make_orm_score(agent_b.agent_id)
-        score_b.score = 0.60
-        session_ctx = make_session_ctx(agent_a, score_a, agent_b, score_b)
-        with patch("agent_trust.tools.scoring.get_session", session_ctx):
+        session_ctx = make_session_ctx(agent_a, agent_b)
+
+        score_map = {
+            agent_a.agent_id: _make_score_data(agent_a.agent_id, score=0.80),
+            agent_b.agent_id: _make_score_data(agent_b.agent_id, score=0.60),
+        }
+
+        async def mock_get_or_compute(agent_id, score_type):
+            return score_map.get(agent_id)
+
+        with (
+            patch("agent_trust.tools.scoring.get_session", session_ctx),
+            patch(
+                "agent_trust.tools.scoring._get_or_compute_score",
+                new=AsyncMock(side_effect=mock_get_or_compute),
+            ),
+        ):
             r = await mcp_session.call_tool(
                 "compare_agents",
                 {"agent_ids": [str(agent_a.agent_id), str(agent_b.agent_id)]},
@@ -1308,6 +1380,10 @@ class TestIssueAttestationMCP:
             patch(
                 "agent_trust.tools.attestations.AgentAuthProvider.authenticate",
                 new=AsyncMock(return_value=identity),
+            ),
+            patch(
+                "agent_trust.ratelimit.check_rate_limit",
+                new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
             ),
             patch("agent_trust.tools.attestations.get_session", session_ctx),
         ):

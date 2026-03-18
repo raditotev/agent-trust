@@ -55,6 +55,20 @@ async def issue_attestation(
     except (AuthenticationError, AuthorizationError) as e:
         return {"error": str(e)}
 
+    from agent_trust.ratelimit import check_rate_limit
+
+    rl_result = await check_rate_limit(
+        agent_id=identity.agent_id,
+        tool_name="issue_attestation",
+        trust_level=identity.trust_level,
+    )
+    if not rl_result.allowed:
+        return {
+            "error": "Rate limit exceeded",
+            "retry_after_seconds": rl_result.retry_after,
+            "limit": rl_result.limit,
+        }
+
     ttl = ttl_hours if ttl_hours is not None else settings.attestation_ttl_hours
     ttl = min(max(1, ttl), 72)  # clamp: 1 hour to 3 days
 
@@ -64,9 +78,7 @@ async def issue_attestation(
         return {"error": f"Invalid agent_id UUID: {agent_id}"}
 
     async with get_session() as session:
-        agent_result = await session.execute(
-            select(Agent).where(Agent.agent_id == subject_uuid)
-        )
+        agent_result = await session.execute(select(Agent).where(Agent.agent_id == subject_uuid))
         agent = agent_result.scalar_one_or_none()
         if not agent:
             return {"error": f"Agent not found: {agent_id}"}

@@ -20,18 +20,27 @@ def generate_ed25519_keypair() -> tuple[Ed25519PrivateKey, Ed25519PublicKey]:
     return private_key, public_key
 
 
-def save_private_key(private_key: Ed25519PrivateKey, path: str | Path) -> None:
-    """Save Ed25519 private key to PEM file."""
+def save_private_key(
+    private_key: Ed25519PrivateKey,
+    path: str | Path,
+    password: str | None = None,
+) -> None:
+    """Save Ed25519 private key to PEM file, optionally encrypted."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    encryption: serialization.KeySerializationEncryption = (
+        serialization.BestAvailableEncryption(password.encode())
+        if password
+        else serialization.NoEncryption()
+    )
     pem = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
+        encryption_algorithm=encryption,
     )
     path.write_bytes(pem)
     os.chmod(path, 0o600)
-    log.info("private_key_saved", path=str(path))
+    log.info("private_key_saved", path=str(path), encrypted=bool(password))
 
 
 def save_public_key(public_key: Ed25519PublicKey, path: str | Path) -> None:
@@ -46,15 +55,21 @@ def save_public_key(public_key: Ed25519PublicKey, path: str | Path) -> None:
     log.info("public_key_saved", path=str(path))
 
 
-def load_private_key(path: str | Path) -> Ed25519PrivateKey:
-    """Load Ed25519 private key from PEM file."""
+def load_private_key(
+    path: str | Path,
+    password: str | None = None,
+) -> Ed25519PrivateKey:
+    """Load Ed25519 private key from PEM file, optionally decrypting."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(
             f"Signing key not found at {path}. Run: uv run python scripts/generate_keypair.py"
         )
     pem = path.read_bytes()
-    key = serialization.load_pem_private_key(pem, password=None)
+    key = serialization.load_pem_private_key(
+        pem,
+        password=password.encode() if password else None,
+    )
     if not isinstance(key, Ed25519PrivateKey):
         raise ValueError(f"Expected Ed25519 private key, got {type(key)}")
     return key
@@ -74,7 +89,10 @@ def get_service_private_key() -> Ed25519PrivateKey:
     """Load the service signing key from the configured path."""
     from agent_trust.config import settings
 
-    return load_private_key(settings.signing_key_path)
+    return load_private_key(
+        settings.signing_key_path,
+        password=settings.signing_key_password or None,
+    )
 
 
 def get_public_key_hex(public_key: Ed25519PublicKey) -> str:

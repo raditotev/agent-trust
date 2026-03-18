@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent_trust.auth.identity import AgentIdentity, AuthenticationError
+from agent_trust.ratelimit import RateLimitResult
 from tests.factories import make_agent, make_trust_score
+
+RATE_LIMIT_ALLOWED = RateLimitResult(allowed=True, limit=60, remaining=59, reset_at=9_999_999_999)
 
 
 @pytest.mark.asyncio
@@ -28,6 +31,10 @@ async def test_register_and_whoami_agentauth_flow():
         patch("agent_trust.tools.agents._resolve_identity", return_value=mock_identity),
         patch("agent_trust.tools.agents._ensure_agent_profile", return_value=(mock_agent, True)),
         patch("agent_trust.tools.agents.get_session"),
+        patch(
+            "agent_trust.tools.agents.check_rate_limit",
+            new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+        ),
     ):
         reg_result = await register_agent(
             display_name="Test Agent",
@@ -78,6 +85,10 @@ async def test_register_standalone_flow():
     with (
         patch("agent_trust.tools.agents._resolve_identity", return_value=mock_identity),
         patch("agent_trust.tools.agents._ensure_agent_profile", return_value=(mock_agent, True)),
+        patch(
+            "agent_trust.tools.agents.check_rate_limit",
+            new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+        ),
     ):
         result = await register_agent(public_key_hex="deadbeef01020304")
         assert result["source"] == "standalone"
@@ -89,5 +100,13 @@ async def test_unauthenticated_raises():
     """Calling register_agent with no credentials raises AuthenticationError."""
     from agent_trust.tools.agents import register_agent
 
-    with pytest.raises(AuthenticationError):
-        await register_agent()
+    with (
+        patch(
+            "agent_trust.tools.agents.check_rate_limit",
+            new=AsyncMock(return_value=RATE_LIMIT_ALLOWED),
+        ),
+        patch("agent_trust.tools.agents.settings") as mock_settings,
+    ):
+        mock_settings.auth_provider = "agentauth"
+        with pytest.raises(AuthenticationError):
+            await register_agent()

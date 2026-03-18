@@ -85,6 +85,7 @@ async def report_interaction(
 
     # Change 3 — Fix #12: Context and evidence_hash size/format validation
     import json as _json
+
     if context is not None:
         try:
             context_size = len(_json.dumps(context).encode("utf-8"))
@@ -95,6 +96,7 @@ async def report_interaction(
 
     if evidence_hash is not None:
         import re
+
         if not re.fullmatch(r"[0-9a-fA-F]{64}", evidence_hash):
             return {"error": "evidence_hash must be a valid SHA-256 hex string (64 hex characters)"}
 
@@ -127,7 +129,9 @@ async def report_interaction(
         # Change 1 — Fix #7: Per-pair daily interaction cap
         pair_cutoff = datetime.now(UTC) - timedelta(hours=24)
         pair_count_result = await session.execute(
-            select(func.count()).select_from(Interaction).where(
+            select(func.count())
+            .select_from(Interaction)
+            .where(
                 Interaction.reported_at >= pair_cutoff,
                 (
                     (Interaction.initiator_id == reporter_uuid)
@@ -267,14 +271,12 @@ async def get_interaction_history(
     # Change 4 — Fix #13: Require authentication for get_interaction_history
     if not access_token:
         return {
-            "error": (
-                "Authentication required: provide access_token to view "
-                "interaction history"
-            )
+            "error": ("Authentication required: provide access_token to view interaction history")
         }
 
     try:
         from agent_trust.auth.resolve import resolve_identity
+
         await resolve_identity(access_token=access_token)
     except Exception as e:
         return {"error": f"Authentication failed: {e}"}

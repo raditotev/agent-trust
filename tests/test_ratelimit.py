@@ -139,9 +139,7 @@ async def test_rate_limit_anon_key_uses_tool_name() -> None:
 
 
 def test_rate_limit_result_fields() -> None:
-    result = RateLimitResult(
-        allowed=True, limit=60, remaining=55, reset_at=int(time.time()) + 60
-    )
+    result = RateLimitResult(allowed=True, limit=60, remaining=55, reset_at=int(time.time()) + 60)
     assert result.allowed is True
     assert result.retry_after is None
     assert result.remaining == 55

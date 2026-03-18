@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 import sqlalchemy
 import structlog
@@ -186,7 +187,29 @@ def main() -> None:
     log.info("starting_agent_trust", transport=args.transport, port=args.port)
 
     if args.transport == "streamable-http":
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=args.port)
+        host = "0.0.0.0" if settings.environment == "production" else "127.0.0.1"
+
+        if settings.environment == "production":
+            if not settings.tls_cert_path or not settings.tls_key_path:
+                log.error(
+                    "tls_required",
+                    message=(
+                        "TLS certificates required for production HTTP transport. "
+                        "Set TLS_CERT_PATH and TLS_KEY_PATH."
+                    ),
+                )
+                sys.exit(1)
+            # NOTE: FastMCP.run() does not currently support ssl_certfile/ssl_keyfile
+            # parameters. TLS must be terminated by a reverse proxy (e.g. nginx, caddy)
+            # in front of this server when running in production.
+            log.info("tls_enabled", cert=settings.tls_cert_path)
+        else:
+            log.warning(
+                "no_tls",
+                message="Running HTTP transport without TLS. Not suitable for production.",
+            )
+
+        mcp.run(transport="streamable-http", host=host, port=args.port)
     else:
         mcp.run(transport="stdio")
 

@@ -17,13 +17,15 @@ log = structlog.get_logger()
 
 # Allowlist of permitted callback tool names for alert subscriptions.
 # Only tools in this set can be used as alert callbacks.
-PERMITTED_CALLBACK_TOOLS: frozenset[str] = frozenset({
-    "notify_agent",
-    "log_score_change",
-    "update_agent_context",
-    "record_trust_event",
-    "alert_handler",
-})
+PERMITTED_CALLBACK_TOOLS: frozenset[str] = frozenset(
+    {
+        "notify_agent",
+        "log_score_change",
+        "update_agent_context",
+        "record_trust_event",
+        "alert_handler",
+    }
+)
 
 
 async def subscribe_alerts(
@@ -65,7 +67,7 @@ async def subscribe_alerts(
     if callback_tool not in PERMITTED_CALLBACK_TOOLS:
         return {
             "error": f"callback_tool '{callback_tool}' is not permitted. "
-                     f"Allowed values: {sorted(PERMITTED_CALLBACK_TOOLS)}",
+            f"Allowed values: {sorted(PERMITTED_CALLBACK_TOOLS)}",
             "permitted_tools": sorted(PERMITTED_CALLBACK_TOOLS),
         }
 

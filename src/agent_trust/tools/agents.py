@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import binascii
 import json as _json
+import time
 import uuid
 
+import jwt as pyjwt
 import structlog
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 from sqlalchemy import select
 
 from agent_trust.auth.agentauth import AgentAuthProvider
@@ -15,6 +20,7 @@ from agent_trust.config import settings
 from agent_trust.db.redis import get_redis
 from agent_trust.db.session import get_session
 from agent_trust.models import Agent, TrustScore
+from agent_trust.ratelimit import check_rate_limit
 
 log = structlog.get_logger()
 
@@ -70,8 +76,8 @@ async def _ensure_agent_profile(
     public_key: bytes | None = None,
 ) -> tuple[Agent, bool]:
     """Get or create an agent profile. Returns (agent, created).
-    
-    NOTE: If delegated_by is ever set via this function or elsewhere, 
+
+    NOTE: If delegated_by is ever set via this function or elsewhere,
     it MUST be validated using _check_delegation_cycle() to prevent
     infinite delegation chains and cycles.
     """
@@ -138,6 +144,29 @@ async def register_agent(
         ``agent_id``, ``source`` ("agentauth" or "standalone"), ``scopes``,
         ``created`` (bool), ``registered_at``, and ``display_name``.
     """
+    # --- Rate limiting (before any DB work) ---
+    _rl_agent_id: str | None = None
+    _rl_trust_level: str | None = None
+    if access_token:
+        try:
+            _rl_identity = await _resolve_identity(access_token, None)
+            _rl_agent_id = _rl_identity.agent_id
+            _rl_trust_level = _rl_identity.trust_level
+        except AuthenticationError:
+            pass  # fall through to anonymous rate limit
+
+    rl_result = await check_rate_limit(
+        agent_id=_rl_agent_id,
+        tool_name="register_agent",
+        trust_level=_rl_trust_level,
+    )
+    if not rl_result.allowed:
+        return {
+            "error": "Rate limit exceeded",
+            "retry_after_seconds": rl_result.retry_after,
+            "limit": rl_result.limit,
+        }
+
     # Input size validation
     if display_name is not None and len(display_name) > 200:
         return {"error": "display_name too long: maximum 200 characters"}
@@ -237,20 +266,45 @@ async def register_agent(
 async def link_agentauth(
     access_token: str,
     public_key_hex: str,
+    signed_proof: str,
 ) -> dict:
     """Link a standalone trust profile to an AgentAuth identity.
 
-    Provide your AgentAuth ``access_token`` and the ``public_key_hex`` you
-    originally registered with. Your interaction history and scores transfer
-    to the AgentAuth identity. The standalone profile is updated to reflect
-    the AgentAuth source. This is a one-time, irreversible operation.
+    Provide your AgentAuth ``access_token``, the ``public_key_hex`` you
+    originally registered with, and a ``signed_proof`` JWT proving you own
+    the standalone agent's private key. Your interaction history and scores
+    transfer to the AgentAuth identity. The standalone profile is updated to
+    reflect the AgentAuth source. This is a one-time, irreversible operation.
 
     After linking, authenticate exclusively with your AgentAuth token — the
     public key will no longer be usable for authentication.
 
+    The ``signed_proof`` JWT must be signed with the standalone agent's
+    Ed25519 private key (algorithm ``EdDSA``) and contain the following
+    claims:
+
+    - ``sub``: your ``public_key_hex`` (hex-encoded 32-byte public key)
+    - ``action``: the literal string ``"link_agentauth"``
+    - ``iat``: issued-at Unix timestamp (must be within 300 seconds of now)
+
+    Example (Python)::
+
+        import jwt, time
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        private_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex))
+        signed_proof = jwt.encode(
+            {"sub": public_key_hex, "action": "link_agentauth", "iat": int(time.time())},
+            private_key,
+            algorithm="EdDSA",
+        )
+
     Args:
         access_token: Valid AgentAuth bearer token identifying the target identity.
         public_key_hex: Hex-encoded Ed25519 public key used during standalone registration.
+        signed_proof: JWT signed by the standalone agent's Ed25519 private key,
+            proving ownership of the key. Must contain ``sub``, ``action``, and
+            ``iat`` claims as described above.
 
     Returns:
         ``agent_id`` (the AgentAuth UUID now canonical), ``merged`` (bool),
@@ -259,6 +313,40 @@ async def link_agentauth(
     Raises:
         ``AuthenticationError`` if the token is invalid or the key is unknown.
     """
+    # --- Verify ownership proof ---
+    try:
+        public_key_bytes = bytes.fromhex(public_key_hex)
+    except (ValueError, binascii.Error) as e:
+        raise AuthenticationError(f"Invalid public_key_hex: {e}") from e
+
+    try:
+        public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+    except Exception as e:
+        return {"error": f"Invalid ownership proof: cannot decode public key — {e}"}
+
+    try:
+        payload = pyjwt.decode(
+            signed_proof,
+            public_key,
+            algorithms=["EdDSA"],
+            options={"require": ["sub", "action", "iat"]},
+        )
+    except pyjwt.InvalidTokenError as e:
+        return {"error": f"Invalid ownership proof: JWT verification failed — {e}"}
+
+    if payload.get("sub") != public_key_hex:
+        return {"error": "Invalid ownership proof: 'sub' does not match public_key_hex"}
+
+    if payload.get("action") != "link_agentauth":
+        return {"error": "Invalid ownership proof: 'action' must be 'link_agentauth'"}
+
+    iat = payload.get("iat")
+    if not isinstance(iat, int | float) or abs(time.time() - iat) > 300:
+        return {
+            "error": "Invalid ownership proof: 'iat' is missing or expired "
+            "(must be within 300 seconds)",
+        }
+
     # Verify the AgentAuth token and get the identity
     redis = await get_redis()
     aa_provider = AgentAuthProvider(redis_client=redis)
@@ -266,11 +354,6 @@ async def link_agentauth(
     aa_uuid = uuid.UUID(aa_identity.agent_id)
 
     # Look up the standalone agent by public key
-    try:
-        public_key_bytes = bytes.fromhex(public_key_hex)
-    except (ValueError, binascii.Error) as e:
-        raise AuthenticationError(f"Invalid public_key_hex: {e}") from e
-
     async with get_session() as session:
         result = await session.execute(select(Agent).where(Agent.public_key == public_key_bytes))
         standalone_agent = result.scalar_one_or_none()
