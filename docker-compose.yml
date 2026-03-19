@@ -8,24 +8,24 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-agent_trust}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     ports:
-      - "127.0.0.1:5433:5432"
+      - '127.0.0.1:5433:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_trust}"]
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-agent_trust}']
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
+    command: ['redis-server', '--requirepass', '${REDIS_PASSWORD:-changeme}']
     ports:
-      - "127.0.0.1:6380:6379"
+      - '127.0.0.1:6380:6379'
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD:-changeme}', 'ping']
       interval: 5s
       timeout: 5s
       retries: 5
@@ -33,14 +33,14 @@ services:
   agent-trust:
     build: .
     ports:
-      - "127.0.0.1:8140:8000"
+      - '127.0.0.1:8140:8000'
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_trust}:${POSTGRES_PASSWORD:?err}@postgres:5432/${POSTGRES_DB:-agent_trust}
       REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
       AUTH_PROVIDER: both
       MCP_TRANSPORT: streamable-http
-      MCP_PORT: "8000"
-      JSON_LOGS: "true"
+      MCP_PORT: ${MCP_PORT:-8000}
+      JSON_LOGS: 'true'
       LOG_LEVEL: INFO
     depends_on:
       postgres:
@@ -53,7 +53,7 @@ services:
 
   worker:
     build: .
-    command: ["uv", "run", "python", "scripts/run_worker.py"]
+    command: ['uv', 'run', 'python', 'scripts/run_worker.py']
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_trust}:${POSTGRES_PASSWORD:?err}@postgres:5432/${POSTGRES_DB:-agent_trust}
       REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
@@ -69,14 +69,14 @@ services:
   prometheus:
     image: prom/prometheus:v3.2.1
     ports:
-      - "127.0.0.1:9090:9090"
+      - '127.0.0.1:9090:9090'
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=30d"
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
     depends_on:
       - agent-trust
     restart: unless-stopped
@@ -84,10 +84,10 @@ services:
   grafana:
     image: grafana/grafana:11.5.2
     ports:
-      - "127.0.0.1:3001:3000"
+      - '127.0.0.1:3001:3000'
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_SIGN_UP: 'false'
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
