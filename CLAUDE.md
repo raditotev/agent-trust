@@ -35,6 +35,14 @@ uv run ruff check src/ # lint
 uv run ruff format src/ # format
 uv run alembic revision --autogenerate -m "msg" # new migration
 
+## CI/CD
+
+- Workflows: `.github/workflows/ci.yml` (lint + test) and `.github/workflows/deploy.yml` (SSH deploy)
+- CI runs on every push/PR — postgres 16 + redis 7 services, full pytest suite
+- CD fires on CI success on `main` — git pull → docker compose build → alembic upgrade head → docker compose up -d
+- Server exposed via Cloudflare tunnel on the Hetzner host (no workflow changes needed for routing)
+- Required secrets: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_KEY`, `HETZNER_APP_DIR`
+
 ## Architecture Rules
 
 - This is an MCP-only server. NO REST API, NO HTTP endpoints beyond MCP transport.

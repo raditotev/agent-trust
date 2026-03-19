@@ -218,18 +218,54 @@ uv run alembic revision --autogenerate -m "description"
 uv run python scripts/seed_test_agents.py
 ```
 
-## Deployment
+## CI/CD
+
+Two GitHub Actions workflows automate testing and deployment.
+
+### CI (`ci.yml`)
+
+Runs on every push and pull request:
+
+1. Starts PostgreSQL 16 (TimescaleDB) and Redis 7 as services
+2. Installs dependencies via `uv sync`
+3. Generates a signing keypair and runs Alembic migrations
+4. Lint: `ruff check src/`
+5. Format check: `ruff format --check src/`
+6. Tests: `pytest --tb=short -q`
+
+### CD (`deploy.yml`)
+
+Triggers automatically when CI passes on `main`. Connects via SSH to the Hetzner server and runs:
 
 ```bash
-# Build image
-docker build -t agent-trust:latest .
+git pull origin main
+docker compose build
+docker compose run --rm agent-trust uv run alembic upgrade head
+docker compose up -d
+```
 
+The server is exposed to the internet via a Cloudflare tunnel running on the Hetzner host — no CI changes needed for routing.
+
+### Required GitHub Secrets
+
+| Secret | Description |
+| ---------------- | ------------------------------------------- |
+| `HETZNER_HOST` | Server IP or hostname |
+| `HETZNER_USER` | SSH username |
+| `HETZNER_SSH_KEY` | Private SSH key (PEM format) |
+| `HETZNER_APP_DIR` | Absolute app path on server (e.g. `/opt/agent-trust`) |
+
+## Deployment
+
+For manual or first-time deployment:
+
+```bash
 # Full stack with docker compose
 docker compose up -d
 
 # Run migrations on first deploy
-docker compose exec agent-trust uv run alembic upgrade head
+docker compose run --rm agent-trust uv run alembic upgrade head
 
-# Generate signing keypair
+# Generate signing keypair (first time only)
 docker compose exec agent-trust uv run python scripts/generate_keypair.py
 ```
