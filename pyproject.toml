@@ -3,6 +3,7 @@ name = "agent-trust"
 version = "0.1.0"
 description = "MCP Server for Agent Reputation & Trust Scoring"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.13"
 dependencies = [
     "mcp[cli]>=1.0.0",
