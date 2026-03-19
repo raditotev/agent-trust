@@ -7,7 +7,7 @@ WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Install dependencies (cached layer)
-COPY pyproject.toml uv.lock* LICENSE ./
+COPY pyproject.toml uv.lock* LICENSE README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --frozen
 
