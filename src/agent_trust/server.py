@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
 
 import sqlalchemy
 import structlog
