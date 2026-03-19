@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import arq.connections
+
+from agent_trust.config import settings
 from agent_trust.workers.alert_dispatcher import dispatch_alerts
 from agent_trust.workers.attestation_expiry import expire_attestations as expire_attestations
 from agent_trust.workers.decay_refresh import refresh_all_scores as refresh_all_scores
@@ -17,10 +20,4 @@ class WorkerSettings:
         # arq.cron(expire_attestations, minute=0),
     ]
 
-    @staticmethod
-    def get_redis_settings():
-        import arq.connections
-
-        from agent_trust.config import settings
-
-        return arq.connections.RedisSettings.from_dsn(settings.redis_url)
+    redis_settings = arq.connections.RedisSettings.from_dsn(settings.redis_url)
