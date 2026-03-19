@@ -85,5 +85,9 @@ class Settings(BaseSettings):
     sybil_burst_7d_threshold: int = 50  # agents registered in same 7-day window (±84hr)
     sybil_report_velocity_threshold: int = 50  # negative reports by one agent in 24h
 
+    # Metrics
+    metrics_enabled: bool = True  # expose /metrics endpoint (streamable-http only)
+    metrics_port: int = 0  # 0 = same port as MCP; set to a separate port to isolate
+
 
 settings = Settings()

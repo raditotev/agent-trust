@@ -157,9 +157,34 @@ AgentTrust uses a **Bayesian Beta distribution** model:
 | `MCP_PORT`               | `8000`                           | Port for streamable-http transport                      |
 | `LOG_LEVEL`              | `INFO`                           | Logging level                                           |
 | `JSON_LOGS`              | `false`                          | JSON log format (set `true` in production)              |
+| `METRICS_ENABLED`        | `true`                           | Expose `/metrics` Prometheus endpoint (streamable-http only) |
 | `SYBIL_BURST_24H_THRESHOLD`       | `20`  | Agents registered in the same ±12-hour window to trigger medium Sybil alert    |
 | `SYBIL_BURST_7D_THRESHOLD`        | `50`  | Agents registered in the same ±84-hour window to trigger slow Sybil alert      |
 | `SYBIL_REPORT_VELOCITY_THRESHOLD` | `50`  | Distinct negative reports by one agent in 24 hours to trigger velocity signal   |
+
+## Monitoring
+
+AgentTrust exposes a [Prometheus](https://prometheus.io/) `/metrics` endpoint when running with `streamable-http` transport. The docker-compose stack includes Prometheus and Grafana with a pre-provisioned dashboard.
+
+### Metrics
+
+| Metric | Type | Labels | Description |
+| ------ | ---- | ------ | ----------- |
+| `agent_trust_tool_calls_total` | Counter | `tool_name`, `status` | Total MCP tool invocations (status: `success` \| `error`) |
+| `agent_trust_tool_duration_seconds` | Histogram | `tool_name` | End-to-end tool call latency |
+| `agent_trust_tool_errors_total` | Counter | `tool_name`, `error_type` | Tool errors by exception class |
+
+### Access
+
+| URL | Service |
+| --- | ------- |
+| `http://localhost:3001` | Grafana (admin / `$GRAFANA_PASSWORD`) |
+| `http://localhost:9090` | Prometheus |
+| `http://localhost:8140/metrics` | Raw scrape endpoint |
+
+The Grafana dashboard (**AgentTrust — MCP Tool Usage**) is auto-provisioned and shows total calls, error rate, per-tool call rate, latency percentiles (p50/p95/p99), and an error breakdown table.
+
+Set `METRICS_ENABLED=false` to disable the `/metrics` endpoint.
 
 ## Rate Limits
 
@@ -260,7 +285,7 @@ The server is exposed to the internet via a Cloudflare tunnel running on the Het
 For manual or first-time deployment:
 
 ```bash
-# Full stack with docker compose
+# Full stack with docker compose (includes Prometheus + Grafana)
 docker compose up -d
 
 # Run migrations on first deploy

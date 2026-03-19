@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 
 import sqlalchemy
 import structlog
+import uvicorn
 from mcp.server.fastmcp import FastMCP
+from prometheus_client import make_asgi_app as make_prometheus_asgi_app
+from starlette.routing import Mount
 
 from agent_trust.config import settings
+from agent_trust.instrument import track_tool_call
 from agent_trust.logging_config import configure_logging
 from agent_trust.prompts.diagnose import dispute_assessment, explain_score_change
 from agent_trust.prompts.evaluate import evaluate_counterparty
@@ -47,32 +52,32 @@ mcp = FastMCP(
 )
 
 # Agent tools
-mcp.tool()(register_agent)
-mcp.tool()(link_agentauth)
-mcp.tool()(generate_agent_token)
-mcp.tool()(whoami)
-mcp.tool()(get_agent_profile)
-mcp.tool()(search_agents)
+mcp.tool()(track_tool_call(register_agent))
+mcp.tool()(track_tool_call(link_agentauth))
+mcp.tool()(track_tool_call(generate_agent_token))
+mcp.tool()(track_tool_call(whoami))
+mcp.tool()(track_tool_call(get_agent_profile))
+mcp.tool()(track_tool_call(search_agents))
 
 # Interaction tools
-mcp.tool()(report_interaction)
-mcp.tool()(get_interaction_history)
+mcp.tool()(track_tool_call(report_interaction))
+mcp.tool()(track_tool_call(get_interaction_history))
 
 # Dispute tools
-mcp.tool()(file_dispute)
-mcp.tool()(resolve_dispute)
+mcp.tool()(track_tool_call(file_dispute))
+mcp.tool()(track_tool_call(resolve_dispute))
 
 # Scoring tools
-mcp.tool()(check_trust)
-mcp.tool()(get_score_breakdown)
-mcp.tool()(compare_agents)
+mcp.tool()(track_tool_call(check_trust))
+mcp.tool()(track_tool_call(get_score_breakdown))
+mcp.tool()(track_tool_call(compare_agents))
 
 # Attestation tools
-mcp.tool()(issue_attestation)
-mcp.tool()(verify_attestation)
+mcp.tool()(track_tool_call(issue_attestation))
+mcp.tool()(track_tool_call(verify_attestation))
 
 # Sybil detection
-mcp.tool()(sybil_check)
+mcp.tool()(track_tool_call(sybil_check))
 
 
 # Prompts
@@ -209,7 +214,17 @@ def main() -> None:
                 message="Running HTTP transport without TLS. Not suitable for production.",
             )
 
-        mcp.run(transport="streamable-http", host=host, port=args.port)
+        starlette_app = mcp.streamable_http_app()
+
+        if settings.metrics_enabled:
+            starlette_app.router.routes.insert(
+                0, Mount("/metrics", app=make_prometheus_asgi_app())
+            )
+            log.info("metrics_enabled", path="/metrics", port=args.port)
+
+        uvicorn_config = uvicorn.Config(starlette_app, host=host, port=args.port)
+        uvicorn_server = uvicorn.Server(uvicorn_config)
+        asyncio.run(uvicorn_server.serve())
     else:
         mcp.run(transport="stdio")
 

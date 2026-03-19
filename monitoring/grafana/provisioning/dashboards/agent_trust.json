@@ -1,0 +1,163 @@
+{
+  "uid": "agent-trust-tools",
+  "title": "AgentTrust — MCP Tool Usage",
+  "tags": ["agent-trust", "mcp"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Tool Calls",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(agent_trust_tool_calls_total)",
+          "legendFormat": "Total"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Successful Calls",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(agent_trust_tool_calls_total{status=\"success\"})",
+          "legendFormat": "Success"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "thresholds": {
+          "steps": [{ "color": "green", "value": null }]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Error Calls",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(agent_trust_tool_calls_total{status=\"error\"})",
+          "legendFormat": "Errors"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "red", "value": 10 }
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Error Rate",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(agent_trust_tool_calls_total{status=\"error\"}[5m])) / sum(rate(agent_trust_tool_calls_total[5m])) * 100",
+          "legendFormat": "Error %"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "unit": "percent",
+        "colorMode": "background",
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "red", "value": 5 }
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Tool Call Rate (calls/min)",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (tool_name) (rate(agent_trust_tool_calls_total[1m])) * 60",
+          "legendFormat": "{{ tool_name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqpm" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Tool Latency — p50 / p95 / p99 (seconds)",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (tool_name, le) (rate(agent_trust_tool_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{ tool_name }}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (tool_name, le) (rate(agent_trust_tool_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{ tool_name }}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (tool_name, le) (rate(agent_trust_tool_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{ tool_name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      }
+    },
+    {
+      "id": 7,
+      "type": "bargauge",
+      "title": "Total Calls by Tool",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (tool_name) (agent_trust_tool_calls_total))",
+          "legendFormat": "{{ tool_name }}"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Errors by Tool and Type",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (tool_name, error_type) (agent_trust_tool_errors_total))",
+          "legendFormat": "{{ tool_name }} / {{ error_type }}",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "Value #A": false } } }
+      ]
+    }
+  ]
+}
