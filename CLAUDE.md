@@ -87,6 +87,7 @@ uv run alembic revision --autogenerate -m "msg" # new migration
 - SYBIL_REPORT_VELOCITY_THRESHOLD: distinct negative reports per 24h threshold for velocity signal (default: 50)
 - MCP_TRANSPORT: stdio | streamable-http (default: stdio)
 - MCP_PORT: port for streamable-http transport (default: 8000)
+- ENVIRONMENT: development | production (default: development) — production binds to 0.0.0.0 and is required when running behind a reverse proxy (Cloudflare tunnel); TLS is terminated by the proxy
 
 ## Coding Conventions
 

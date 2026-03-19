@@ -29,10 +29,8 @@ class Settings(BaseSettings):
 
     # Environment
     environment: str = "development"  # "development" or "production"
-
-    # TLS (for streamable-http transport)
-    tls_cert_path: str = ""  # Path to TLS certificate PEM file
-    tls_key_path: str = ""  # Path to TLS private key PEM file
+    # Note: TLS is terminated by the reverse proxy (Cloudflare tunnel). No cert
+    # paths are needed here — FastMCP does not support ssl_certfile/ssl_keyfile.
 
     # Scoring parameters
     score_half_life_days: float = 90.0

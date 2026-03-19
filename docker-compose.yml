@@ -33,10 +33,11 @@ services:
   agent-trust:
     build: .
     ports:
-      - '127.0.0.1:8140:8000'
+      - '8140:8000'
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agent_trust}:${POSTGRES_PASSWORD:?err}@postgres:5432/${POSTGRES_DB:-agent_trust}
       REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/0
+      ENVIRONMENT: production
       AUTH_PROVIDER: both
       MCP_TRANSPORT: streamable-http
       MCP_PORT: ${MCP_PORT:-8000}

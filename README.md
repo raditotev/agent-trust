@@ -155,6 +155,7 @@ AgentTrust uses a **Bayesian Beta distribution** model:
 | `ATTESTATION_CUMULATIVE_REVOCATION_THRESHOLD` | `0.10` | Cumulative score drop from attestation issuance score that triggers revocation |
 | `MCP_TRANSPORT`          | `stdio`                          | `stdio` \| `streamable-http`                            |
 | `MCP_PORT`               | `8000`                           | Port for streamable-http transport                      |
+| `ENVIRONMENT`            | `development`                    | `development` \| `production` — binds to `0.0.0.0` in production (required when running behind a reverse proxy such as a Cloudflare tunnel) |
 | `LOG_LEVEL`              | `INFO`                           | Logging level                                           |
 | `JSON_LOGS`              | `false`                          | JSON log format (set `true` in production)              |
 | `METRICS_ENABLED`        | `true`                           | Expose `/metrics` Prometheus endpoint (streamable-http only) |

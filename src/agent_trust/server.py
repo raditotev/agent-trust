@@ -8,6 +8,7 @@ import sqlalchemy
 import structlog
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from prometheus_client import make_asgi_app as make_prometheus_asgi_app
 from starlette.routing import Mount
 
@@ -49,6 +50,10 @@ mcp = FastMCP(
         "Use issue_attestation to get a portable trust certificate. "
         "Use file_dispute to contest incorrect interaction reports."
     ),
+    # Disable DNS rebinding protection — the server runs behind a reverse proxy
+    # (Cloudflare tunnel) which handles host validation at the edge. Enabling this
+    # would reject requests where Host != localhost (e.g., host.docker.internal).
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 # Agent tools
@@ -195,19 +200,13 @@ def main() -> None:
         host = "0.0.0.0" if settings.environment == "production" else "127.0.0.1"
 
         if settings.environment == "production":
-            if not settings.tls_cert_path or not settings.tls_key_path:
-                log.error(
-                    "tls_required",
-                    message=(
-                        "TLS certificates required for production HTTP transport. "
-                        "Set TLS_CERT_PATH and TLS_KEY_PATH."
-                    ),
-                )
-                sys.exit(1)
-            # NOTE: FastMCP.run() does not currently support ssl_certfile/ssl_keyfile
-            # parameters. TLS must be terminated by a reverse proxy (e.g. nginx, caddy)
-            # in front of this server when running in production.
-            log.info("tls_enabled", cert=settings.tls_cert_path)
+            # TLS must be terminated by a reverse proxy (e.g. Cloudflare tunnel, nginx,
+            # caddy) in front of this server. FastMCP does not support ssl_certfile/
+            # ssl_keyfile parameters, so TLS cert paths are intentionally not required.
+            log.info(
+                "production_mode",
+                message="Running in production mode. TLS should be terminated by a reverse proxy.",
+            )
         else:
             log.warning(
                 "no_tls",
@@ -220,7 +219,16 @@ def main() -> None:
             starlette_app.router.routes.insert(0, Mount("/metrics", app=make_prometheus_asgi_app()))
             log.info("metrics_enabled", path="/metrics", port=args.port)
 
-        uvicorn_config = uvicorn.Config(starlette_app, host=host, port=args.port)
+        uvicorn_config = uvicorn.Config(
+            starlette_app,
+            host=host,
+            port=args.port,
+            # Trust proxy headers from Cloudflare tunnel and other reverse proxies.
+            # The tunnel forwards requests with Host: host.docker.internal, so we
+            # must not restrict allowed hosts at this layer.
+            forwarded_allow_ips="*",
+            proxy_headers=True,
+        )
         uvicorn_server = uvicorn.Server(uvicorn_config)
         asyncio.run(uvicorn_server.serve())
     else:
