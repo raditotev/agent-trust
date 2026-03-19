@@ -34,8 +34,6 @@ def track_tool_call[F: Callable[..., Coroutine[Any, Any, Any]]](fn: F) -> F:
             TOOL_ERRORS_TOTAL.labels(tool_name=tool_name, error_type=error_type).inc()
             raise
         finally:
-            TOOL_DURATION_SECONDS.labels(tool_name=tool_name).observe(
-                time.perf_counter() - start
-            )
+            TOOL_DURATION_SECONDS.labels(tool_name=tool_name).observe(time.perf_counter() - start)
 
     return wrapper  # type: ignore[return-value]

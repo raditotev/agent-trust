@@ -217,9 +217,7 @@ def main() -> None:
         starlette_app = mcp.streamable_http_app()
 
         if settings.metrics_enabled:
-            starlette_app.router.routes.insert(
-                0, Mount("/metrics", app=make_prometheus_asgi_app())
-            )
+            starlette_app.router.routes.insert(0, Mount("/metrics", app=make_prometheus_asgi_app()))
             log.info("metrics_enabled", path="/metrics", port=args.port)
 
         uvicorn_config = uvicorn.Config(starlette_app, host=host, port=args.port)
