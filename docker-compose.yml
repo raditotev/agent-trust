@@ -19,7 +19,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
     ports:
       - "127.0.0.1:6380:6379"
     volumes:
