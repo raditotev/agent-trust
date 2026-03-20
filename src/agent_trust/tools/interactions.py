@@ -711,8 +711,7 @@ async def confirm_interaction(
                 "authorization_failed",
                 "You are not a party to this interaction.",
                 hint=(
-                    "You can only confirm interactions where you are"
-                    " the initiator or counterparty."
+                    "You can only confirm interactions where you are the initiator or counterparty."
                 ),
             )
 

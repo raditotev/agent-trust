@@ -38,8 +38,7 @@ async def discover() -> dict:
             {
                 "method": "agentauth",
                 "description": (
-                    "AgentAuth bearer token (preferred)."
-                    " Obtain from agentauth.radi.pro."
+                    "AgentAuth bearer token (preferred). Obtain from agentauth.radi.pro."
                 ),
                 "scopes": [
                     "trust.read",

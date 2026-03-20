@@ -139,8 +139,7 @@ async def issue_attestation(
                 "signing_failed",
                 "Signing key not found.",
                 hint=(
-                    "Server operator: run scripts/generate_keypair.py"
-                    " to generate the signing key."
+                    "Server operator: run scripts/generate_keypair.py to generate the signing key."
                 ),
             )
 
