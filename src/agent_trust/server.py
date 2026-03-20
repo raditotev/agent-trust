@@ -31,9 +31,20 @@ from agent_trust.tools.agents import (
     whoami,
 )
 from agent_trust.tools.attestations import issue_attestation, verify_attestation
+from agent_trust.tools.discover import discover
 from agent_trust.tools.disputes import file_dispute, resolve_dispute
-from agent_trust.tools.interactions import get_interaction_history, report_interaction
-from agent_trust.tools.scoring import check_trust, compare_agents, get_score_breakdown
+from agent_trust.tools.interactions import (
+    confirm_interaction,
+    get_interaction_history,
+    list_pending_confirmations,
+    report_interaction,
+)
+from agent_trust.tools.scoring import (
+    check_trust,
+    check_trust_batch,
+    compare_agents,
+    get_score_breakdown,
+)
 from agent_trust.tools.sybil import sybil_check
 
 configure_logging(json_logs=settings.json_logs, log_level=settings.log_level)
@@ -66,6 +77,8 @@ mcp.tool()(track_tool_call(search_agents))
 # Interaction tools
 mcp.tool()(track_tool_call(report_interaction))
 mcp.tool()(track_tool_call(get_interaction_history))
+mcp.tool()(track_tool_call(list_pending_confirmations))
+mcp.tool()(track_tool_call(confirm_interaction))
 
 # Dispute tools
 mcp.tool()(track_tool_call(file_dispute))
@@ -73,6 +86,7 @@ mcp.tool()(track_tool_call(resolve_dispute))
 
 # Scoring tools
 mcp.tool()(track_tool_call(check_trust))
+mcp.tool()(track_tool_call(check_trust_batch))
 mcp.tool()(track_tool_call(get_score_breakdown))
 mcp.tool()(track_tool_call(compare_agents))
 
@@ -82,6 +96,9 @@ mcp.tool()(track_tool_call(verify_attestation))
 
 # Sybil detection
 mcp.tool()(track_tool_call(sybil_check))
+
+# Discovery
+mcp.tool()(track_tool_call(discover))
 
 
 # Prompts
@@ -168,9 +185,11 @@ async def lifespan_startup() -> None:
 
 async def lifespan_shutdown() -> None:
     """Clean up shared resources on shutdown."""
+    from agent_trust.auth.agentauth import close_agentauth_session
     from agent_trust.db.redis import close_redis
     from agent_trust.db.session import engine
 
+    await close_agentauth_session()
     await engine.dispose()
     await close_redis()
     log.info("agent_trust_shutdown")

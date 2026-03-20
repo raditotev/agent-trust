@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 
 import structlog
@@ -17,6 +18,12 @@ TRUST_LEVEL_MULTIPLIERS = {
     "ephemeral": settings.rate_limit_ephemeral_multiplier,
 }
 
+# In-memory fallback counters for transient Redis failures.
+# Structure: {key: list_of_timestamps}. Not shared across processes,
+# so this is a best-effort grace window, not a strict enforcer.
+_fallback_counters: dict[str, list[float]] = defaultdict(list)
+_FALLBACK_GRACE_MULTIPLIER = 0.5  # allow 50% of normal rate during fallback
+
 
 @dataclass
 class RateLimitResult:
@@ -25,6 +32,43 @@ class RateLimitResult:
     remaining: int
     reset_at: int  # unix timestamp when window resets
     retry_after: int | None = None  # seconds to wait if not allowed
+
+
+def _compute_limit(agent_id: str | None, trust_level: str | None) -> int:
+    if agent_id is None:
+        return settings.rate_limit_unauthenticated
+    multiplier = TRUST_LEVEL_MULTIPLIERS.get(trust_level or "standalone", 1.0)
+    return int(settings.rate_limit_base * multiplier)
+
+
+def _fallback_check(key: str, limit: int, window: int = 60) -> RateLimitResult:
+    """In-memory sliding window for transient Redis failures.
+
+    Allows a reduced rate (50% of normal) to avoid full outage.
+    """
+    now = time.time()
+    grace_limit = max(1, int(limit * _FALLBACK_GRACE_MULTIPLIER))
+
+    # Prune old entries
+    _fallback_counters[key] = [t for t in _fallback_counters[key] if now - t < window]
+    current = len(_fallback_counters[key])
+
+    if current >= grace_limit:
+        return RateLimitResult(
+            allowed=False,
+            limit=grace_limit,
+            remaining=0,
+            reset_at=int(now) + window,
+            retry_after=window,
+        )
+
+    _fallback_counters[key].append(now)
+    return RateLimitResult(
+        allowed=True,
+        limit=grace_limit,
+        remaining=max(0, grace_limit - current - 1),
+        reset_at=int(now) + window,
+    )
 
 
 async def check_rate_limit(
@@ -39,24 +83,17 @@ async def check_rate_limit(
     Window is 60 seconds.
 
     Returns RateLimitResult with allowed=False and retry_after if over limit.
-    Fails closed (allowed=False) if Redis is unavailable for security.
+    Falls back to an in-memory grace window at reduced rate if Redis is
+    transiently unavailable, to avoid full service outage.
     """
+    limit = _compute_limit(agent_id, trust_level)
+
     try:
         redis = await get_redis()
     except Exception as e:
-        log.warning("rate_limit_redis_unavailable", error=str(e), action="fail_closed")
-        if agent_id is None:
-            limit = settings.rate_limit_unauthenticated
-        else:
-            multiplier = TRUST_LEVEL_MULTIPLIERS.get(trust_level or "standalone", 1.0)
-            limit = int(settings.rate_limit_base * multiplier)
-        return RateLimitResult(
-            allowed=False,
-            limit=limit,
-            remaining=0,
-            reset_at=int(time.time()) + 10,
-            retry_after=10,
-        )
+        log.warning("rate_limit_redis_unavailable", error=str(e), action="fallback_in_memory")
+        key = f"rl:{agent_id or 'anon'}:{tool_name}"
+        return _fallback_check(key, limit)
 
     window_seconds = 60
     now_ms = int(time.time() * 1000)
@@ -79,14 +116,8 @@ async def check_rate_limit(
         pipe.expire(key, window_seconds * 2)  # TTL safety
         results = await pipe.execute()
     except Exception as e:
-        log.warning("rate_limit_check_failed", error=str(e), action="fail_closed")
-        return RateLimitResult(
-            allowed=False,
-            limit=limit,
-            remaining=0,
-            reset_at=int(time.time()) + 10,
-            retry_after=10,
-        )
+        log.warning("rate_limit_check_failed", error=str(e), action="fallback_in_memory")
+        return _fallback_check(key, limit)
 
     current_count = results[1]  # count BEFORE adding this request
 

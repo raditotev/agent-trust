@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import structlog
@@ -12,19 +13,106 @@ from agent_trust.config import settings
 
 log = structlog.get_logger()
 
+# Module-level persistent connection state
+_session_lock = asyncio.Lock()
+_persistent_session: ClientSession | None = None
+_persistent_streams: tuple | None = None  # (read, write, get_url) context managers
+_persistent_context: object | None = None  # the async context manager itself
+
+
+async def _get_persistent_session() -> ClientSession:
+    """Get or create a persistent MCP client session to AgentAuth.
+
+    Reuses a single connection across calls to avoid TCP+TLS handshake per request.
+    Falls back to a fresh connection if the persistent session is broken.
+    """
+    global _persistent_session, _persistent_streams, _persistent_context
+
+    async with _session_lock:
+        if _persistent_session is not None:
+            try:
+                # Quick health check — list tools is lightweight
+                await _persistent_session.list_tools()
+                return _persistent_session
+            except Exception:
+                log.info("agentauth_session_stale", action="reconnecting")
+                await _close_persistent_session_unlocked()
+
+        headers = {}
+        if settings.agentauth_access_token:
+            headers["Authorization"] = f"Bearer {settings.agentauth_access_token}"
+
+        ctx = streamablehttp_client(settings.agentauth_mcp_url, headers=headers)
+        read, write, _ = await ctx.__aenter__()
+        _persistent_context = ctx
+
+        session = ClientSession(read, write)
+        await session.__aenter__()
+        await session.initialize()
+        _persistent_session = session
+        log.info("agentauth_session_established")
+        return _persistent_session
+
+
+async def _close_persistent_session_unlocked() -> None:
+    """Close the persistent session (caller must hold _session_lock)."""
+    global _persistent_session, _persistent_context
+    if _persistent_session is not None:
+        try:
+            await _persistent_session.__aexit__(None, None, None)
+        except Exception:
+            pass
+        _persistent_session = None
+    if _persistent_context is not None:
+        try:
+            await _persistent_context.__aexit__(None, None, None)
+        except Exception:
+            pass
+        _persistent_context = None
+
+
+async def close_agentauth_session() -> None:
+    """Close the persistent AgentAuth session (call during shutdown)."""
+    async with _session_lock:
+        await _close_persistent_session_unlocked()
+
 
 class AgentAuthProvider:
     """Authentication provider using AgentAuth MCP server.
 
     Connects to AgentAuth's MCP server as an MCP client and calls
     introspect_token and check_permission tools to verify agent identity.
+
+    Uses a persistent connection pool to avoid per-call TCP+TLS overhead.
+    Falls back to single-use connections if the pool is unavailable.
     """
 
     def __init__(self, redis_client=None) -> None:
         self._redis = redis_client
 
     async def _call_agentauth_tool(self, tool_name: str, arguments: dict) -> dict:
-        """Call an AgentAuth MCP tool and return the result."""
+        """Call an AgentAuth MCP tool using the persistent session.
+
+        Falls back to a fresh single-use connection on persistent session failure.
+        """
+        # Try persistent session first
+        try:
+            session = await _get_persistent_session()
+            result = await session.call_tool(tool_name, arguments)
+            if result.content and len(result.content) > 0:
+                content = result.content[0]
+                if hasattr(content, "text"):
+                    return json.loads(content.text)
+            return {}
+        except Exception as e:
+            log.warning(
+                "agentauth_persistent_call_failed",
+                tool=tool_name,
+                error=str(e),
+                action="fallback_to_single_use",
+            )
+
+        # Fallback: single-use connection
         headers = {}
         if settings.agentauth_access_token:
             headers["Authorization"] = f"Bearer {settings.agentauth_access_token}"

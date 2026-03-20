@@ -12,6 +12,7 @@ from agent_trust.auth.provider import require_scope
 from agent_trust.config import settings
 from agent_trust.db.redis import get_redis
 from agent_trust.db.session import get_session
+from agent_trust.errors import tool_error
 from agent_trust.models import Dispute, Interaction
 
 log = structlog.get_logger()
@@ -42,13 +43,33 @@ async def file_dispute(
     dismissed disputes apply a small penalty to the filer.
 
     Returns dispute_id and status ('open').
+
+    Example call:
+        file_dispute(
+            interaction_id="a1b2c3d4-...",
+            reason="Counterparty did not deliver the agreed code review within SLA",
+            access_token="eyJ..."
+        )
+
+    Example response:
+        {
+            "dispute_id": "d5e6f7a8-...",
+            "interaction_id": "a1b2c3d4-...",
+            "filed_against": "550e8400-...",
+            "status": "open",
+            "created_at": "2026-03-20T12:00:00+00:00"
+        }
     """
     provider = await _get_agentauth_provider()
     try:
         identity = await provider.authenticate(access_token=access_token)
         require_scope(identity, "trust.dispute.file")
     except (AuthenticationError, AuthorizationError) as e:
-        return {"error": str(e)}
+        return tool_error(
+            "authentication_failed",
+            str(e),
+            hint="Provide a valid access_token with trust.dispute.file scope.",
+        )
 
     from agent_trust.ratelimit import check_rate_limit
 
@@ -58,13 +79,19 @@ async def file_dispute(
         trust_level=identity.trust_level,
     )
     if not rl_result.allowed:
-        return {
-            "error": "Rate limit exceeded",
-            "retry_after_seconds": rl_result.retry_after,
-        }
+        return tool_error(
+            "rate_limit_exceeded",
+            f"Too many requests. Limit is {rl_result.limit} per minute.",
+            hint="Wait and retry after the cooldown period.",
+            retry_after_seconds=rl_result.retry_after,
+        )
 
     if len(reason) > 5000:
-        return {"error": "reason too long: maximum 5000 characters"}
+        return tool_error(
+            "invalid_input",
+            "reason too long: maximum 5000 characters.",
+            hint="Shorten the reason text to under 5000 characters.",
+        )
 
     if evidence is not None:
         try:
@@ -72,15 +99,19 @@ async def file_dispute(
 
             evidence_size = len(_json.dumps(evidence).encode("utf-8"))
         except (TypeError, ValueError):
-            return {"error": "evidence must be a JSON-serializable object"}
+            return tool_error("invalid_input", "evidence must be a JSON-serializable object.")
         if evidence_size > 10240:
-            return {"error": f"evidence payload too large: {evidence_size} bytes (max 10240)"}
+            return tool_error(
+                "invalid_input",
+                f"evidence payload too large: {evidence_size} bytes (max 10240).",
+                hint="Reduce the evidence size. Include only key facts.",
+            )
 
     try:
         interaction_uuid = uuid.UUID(interaction_id)
         filer_uuid = uuid.UUID(identity.agent_id)
     except ValueError as e:
-        return {"error": f"Invalid UUID: {e}"}
+        return tool_error("invalid_input", f"Invalid UUID: {e}")
 
     async with get_session() as session:
         # Block agents who have filed 5 or more previously dismissed disputes
@@ -95,13 +126,12 @@ async def file_dispute(
         )
         dismissed_count = dismissed_count_result.scalar() or 0
         if dismissed_count >= 5:
-            return {
-                "error": (
-                    "Dispute filing blocked: you have 5 or more previously dismissed disputes. "
-                    "Contact an administrator to restore dispute filing privileges."
-                ),
-                "dismissed_dispute_count": dismissed_count,
-            }
+            return tool_error(
+                "blocked",
+                "Dispute filing blocked: you have 5 or more previously dismissed disputes.",
+                hint="Contact an administrator to restore dispute filing privileges.",
+                dismissed_dispute_count=dismissed_count,
+            )
 
         # 24-hour cooldown after a dismissed dispute
         recent_dismissed_result = await session.execute(
@@ -119,24 +149,34 @@ async def file_dispute(
             cooldown_ends = last_dismissed_at + timedelta(hours=24)
             if datetime.now(UTC) < cooldown_ends:
                 retry_in = int((cooldown_ends - datetime.now(UTC)).total_seconds())
-                return {
-                    "error": (
-                        "Cooldown active: you must wait 24 hours after a dismissed dispute "
-                        "before filing again."
-                    ),
-                    "cooldown_ends_at": cooldown_ends.isoformat(),
-                    "retry_after_seconds": retry_in,
-                }
+                return tool_error(
+                    "cooldown_active",
+                    "You must wait 24 hours after a dismissed dispute before filing again.",
+                    hint=f"Retry after {cooldown_ends.isoformat()}.",
+                    cooldown_ends_at=cooldown_ends.isoformat(),
+                    retry_after_seconds=retry_in,
+                )
 
         ix_result = await session.execute(
             select(Interaction).where(Interaction.interaction_id == interaction_uuid)
         )
         interaction = ix_result.scalar_one_or_none()
         if not interaction:
-            return {"error": f"Interaction not found: {interaction_id}"}
+            return tool_error(
+                "not_found",
+                f"Interaction not found: {interaction_id}",
+                hint="Verify the interaction_id UUID from a previous report_interaction response.",
+            )
 
         if filer_uuid not in (interaction.initiator_id, interaction.counterparty_id):
-            return {"error": "You can only file disputes for interactions you were party to"}
+            return tool_error(
+                "authorization_failed",
+                "You can only file disputes for interactions you were party to.",
+                hint=(
+                    "Use an interaction_id from an interaction"
+                    " where you are the initiator or counterparty."
+                ),
+            )
 
         filed_against_uuid = (
             interaction.counterparty_id
@@ -156,15 +196,17 @@ async def file_dispute(
         )
         filer_daily_count = filer_daily_result.scalar() or 0
         if filer_daily_count >= settings.dispute_filer_daily_cap:
-            return {
-                "error": (
-                    f"Daily dispute limit reached: you have filed {filer_daily_count} disputes "
-                    f"in the last 24 hours (maximum: {settings.dispute_filer_daily_cap}). "
-                    "Wait before filing more disputes."
+            return tool_error(
+                "limit_reached",
+                (
+                    f"Daily dispute limit reached:"
+                    f" {filer_daily_count}/{settings.dispute_filer_daily_cap}"
+                    f" filed in last 24h."
                 ),
-                "disputes_filed_today": filer_daily_count,
-                "daily_cap": settings.dispute_filer_daily_cap,
-            }
+                hint="Wait until the 24-hour window resets before filing more disputes.",
+                disputes_filed_today=filer_daily_count,
+                daily_cap=settings.dispute_filer_daily_cap,
+            )
 
         # Per-filer open cap: max dispute_filer_open_cap open disputes across all targets
         filer_open_result = await session.execute(
@@ -177,15 +219,17 @@ async def file_dispute(
         )
         filer_open_count = filer_open_result.scalar() or 0
         if filer_open_count >= settings.dispute_filer_open_cap:
-            return {
-                "error": (
-                    f"Open dispute limit reached: you already have {filer_open_count} open "
-                    f"disputes across all targets (maximum: {settings.dispute_filer_open_cap}). "
-                    "Wait for existing disputes to be resolved."
+            return tool_error(
+                "limit_reached",
+                (
+                    f"Open dispute limit reached:"
+                    f" {filer_open_count}/{settings.dispute_filer_open_cap}"
+                    f" open disputes."
                 ),
-                "open_dispute_count": filer_open_count,
-                "open_cap": settings.dispute_filer_open_cap,
-            }
+                hint="Wait for existing disputes to be resolved before filing new ones.",
+                open_dispute_count=filer_open_count,
+                open_cap=settings.dispute_filer_open_cap,
+            )
 
         open_count_result = await session.execute(
             select(func.count())
@@ -197,13 +241,12 @@ async def file_dispute(
         )
         open_count = open_count_result.scalar() or 0
         if open_count >= 10:
-            return {
-                "error": (
-                    "Maximum open disputes (10) already filed against this agent. "
-                    "Wait for existing disputes to be resolved."
-                ),
-                "open_dispute_count": open_count,
-            }
+            return tool_error(
+                "limit_reached",
+                "Maximum 10 open disputes already filed against this agent.",
+                hint="Wait for existing disputes against this agent to be resolved.",
+                open_dispute_count=open_count,
+            )
 
         existing_result = await session.execute(
             select(Dispute).where(
@@ -213,7 +256,11 @@ async def file_dispute(
             )
         )
         if existing_result.scalar_one_or_none():
-            return {"error": "You already have an open dispute for this interaction"}
+            return tool_error(
+                "duplicate",
+                "You already have an open dispute for this interaction.",
+                hint="Check the status of your existing dispute instead of filing a duplicate.",
+            )
 
         dispute = Dispute(
             dispute_id=uuid.uuid4(),
@@ -271,7 +318,11 @@ async def resolve_dispute(
         identity = await provider.authenticate(access_token=access_token)
         require_scope(identity, "trust.dispute.resolve")
     except (AuthenticationError, AuthorizationError) as e:
-        return {"error": str(e)}
+        return tool_error(
+            "authentication_failed",
+            str(e),
+            hint="Provide a valid access_token with trust.dispute.resolve scope.",
+        )
 
     is_authorized = await provider.check_permission(
         identity,
@@ -279,33 +330,49 @@ async def resolve_dispute(
         resource="/trust/disputes/resolve",
     )
     if not is_authorized:
-        return {
-            "error": (
-                "Not authorized as arbitrator. "
-                "The trust.dispute.resolve scope is required AND "
-                "AgentAuth must grant 'execute' on '/trust/disputes/resolve'."
-            )
-        }
+        return tool_error(
+            "authorization_failed",
+            "Not authorized as arbitrator.",
+            hint=(
+                "Requires trust.dispute.resolve scope AND AgentAuth"
+                " 'execute' permission on '/trust/disputes/resolve'."
+            ),
+        )
 
     if resolution not in VALID_RESOLUTIONS:
-        return {"error": f"Invalid resolution. Must be one of: {sorted(VALID_RESOLUTIONS)}"}
+        return tool_error(
+            "invalid_input",
+            f"Invalid resolution '{resolution}'.",
+            hint=f"Must be one of: {sorted(VALID_RESOLUTIONS)}.",
+        )
 
     if resolution_note is not None and len(resolution_note) > 2000:
-        return {"error": "resolution_note too long: maximum 2000 characters"}
+        return tool_error(
+            "invalid_input",
+            "resolution_note too long: maximum 2000 characters.",
+        )
 
     try:
         dispute_uuid = uuid.UUID(dispute_id)
         resolver_uuid = uuid.UUID(identity.agent_id)
     except ValueError as e:
-        return {"error": f"Invalid UUID: {e}"}
+        return tool_error("invalid_input", f"Invalid UUID: {e}")
 
     async with get_session() as session:
         result = await session.execute(select(Dispute).where(Dispute.dispute_id == dispute_uuid))
         dispute = result.scalar_one_or_none()
         if not dispute:
-            return {"error": f"Dispute not found: {dispute_id}"}
+            return tool_error(
+                "not_found",
+                f"Dispute not found: {dispute_id}",
+                hint="Verify the dispute_id UUID.",
+            )
         if dispute.status != "open":
-            return {"error": f"Dispute is already {dispute.status}"}
+            return tool_error(
+                "invalid_input",
+                f"Dispute is already {dispute.status}.",
+                hint="Only open disputes can be resolved.",
+            )
 
         dispute.status = "resolved"
         dispute.resolution = resolution

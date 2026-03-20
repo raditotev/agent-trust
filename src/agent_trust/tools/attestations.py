@@ -19,6 +19,7 @@ from agent_trust.crypto.jwt import (
 )
 from agent_trust.db.redis import get_redis
 from agent_trust.db.session import get_session
+from agent_trust.errors import tool_error
 from agent_trust.models import Agent, Attestation, TrustScore
 
 log = structlog.get_logger()
@@ -46,6 +47,19 @@ async def issue_attestation(
 
     ttl_hours: validity period in hours (default: ATTESTATION_TTL_HOURS config)
     Requires authentication with trust.attest.issue scope.
+
+    Example call:
+        issue_attestation(agent_id="550e8400-...", access_token="eyJ...", ttl_hours=24)
+
+    Example response:
+        {
+            "attestation_id": "b1c2d3e4-...",
+            "subject_agent_id": "550e8400-...",
+            "jwt_token": "eyJ...",
+            "score_snapshot": {"overall": {"score": 0.82, "confidence": 0.71}},
+            "valid_from": "2026-03-20T12:00:00+00:00",
+            "valid_until": "2026-03-21T12:00:00+00:00"
+        }
     """
     redis = await get_redis()
     provider = AgentAuthProvider(redis_client=redis)
@@ -53,7 +67,11 @@ async def issue_attestation(
         identity = await provider.authenticate(access_token=access_token)
         require_scope(identity, "trust.attest.issue")
     except (AuthenticationError, AuthorizationError) as e:
-        return {"error": str(e)}
+        return tool_error(
+            "authentication_failed",
+            str(e),
+            hint="Provide a valid access_token with trust.attest.issue scope.",
+        )
 
     from agent_trust.ratelimit import check_rate_limit
 
@@ -63,11 +81,13 @@ async def issue_attestation(
         trust_level=identity.trust_level,
     )
     if not rl_result.allowed:
-        return {
-            "error": "Rate limit exceeded",
-            "retry_after_seconds": rl_result.retry_after,
-            "limit": rl_result.limit,
-        }
+        return tool_error(
+            "rate_limit_exceeded",
+            f"Too many requests. Limit is {rl_result.limit} per minute.",
+            hint="Wait and retry after the cooldown period.",
+            retry_after_seconds=rl_result.retry_after,
+            limit=rl_result.limit,
+        )
 
     ttl = ttl_hours if ttl_hours is not None else settings.attestation_ttl_hours
     ttl = min(max(1, ttl), 72)  # clamp: 1 hour to 3 days
@@ -75,13 +95,17 @@ async def issue_attestation(
     try:
         subject_uuid = uuid.UUID(agent_id)
     except ValueError:
-        return {"error": f"Invalid agent_id UUID: {agent_id}"}
+        return tool_error("invalid_input", f"Invalid agent_id UUID: {agent_id}")
 
     async with get_session() as session:
         agent_result = await session.execute(select(Agent).where(Agent.agent_id == subject_uuid))
         agent = agent_result.scalar_one_or_none()
         if not agent:
-            return {"error": f"Agent not found: {agent_id}"}
+            return tool_error(
+                "not_found",
+                f"Agent not found: {agent_id}",
+                hint="Verify the agent_id or register the agent first.",
+            )
 
         scores_result = await session.execute(
             select(TrustScore).where(TrustScore.agent_id == subject_uuid)
@@ -110,10 +134,15 @@ async def issue_attestation(
                 agentauth_linked=agent.agentauth_linked,
                 agent_type=agent.metadata_.get("agent_type", "unknown"),
             )
-        except FileNotFoundError as e:
-            return {
-                "error": f"Signing key not found. Run scripts/generate_keypair.py first. Details: {e}"  # noqa: E501
-            }
+        except FileNotFoundError:
+            return tool_error(
+                "signing_failed",
+                "Signing key not found.",
+                hint=(
+                    "Server operator: run scripts/generate_keypair.py"
+                    " to generate the signing key."
+                ),
+            )
 
         attestation = Attestation(
             attestation_id=attestation_id,

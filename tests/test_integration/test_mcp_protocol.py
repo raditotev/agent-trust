@@ -38,7 +38,10 @@ from tests.test_integration.conftest import (
 
 EXPECTED_TOOLS = {
     "check_trust",
+    "check_trust_batch",
     "compare_agents",
+    "confirm_interaction",
+    "discover",
     "file_dispute",
     "generate_agent_token",
     "get_agent_profile",
@@ -46,6 +49,7 @@ EXPECTED_TOOLS = {
     "get_score_breakdown",
     "issue_attestation",
     "link_agentauth",
+    "list_pending_confirmations",
     "register_agent",
     "report_interaction",
     "resolve_dispute",
@@ -854,7 +858,7 @@ class TestReportInteractionMCP:
 
         assert not r.isError
         data = _parse(r)
-        assert "Rate limit" in data["error"]
+        assert data["error_code"] == "rate_limit_exceeded"
         assert "retry_after_seconds" in data
 
 

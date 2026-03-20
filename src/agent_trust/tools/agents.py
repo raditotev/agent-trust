@@ -143,6 +143,20 @@ async def register_agent(
     Returns:
         ``agent_id``, ``source`` ("agentauth" or "standalone"), ``scopes``,
         ``created`` (bool), ``registered_at``, and ``display_name``.
+
+    Example call (auto-generated keys — simplest path):
+        register_agent(display_name="my-search-agent", capabilities=["search", "summarize"])
+
+    Example response:
+        {
+            "agent_id": "550e8400-...",
+            "source": "standalone",
+            "scopes": ["trust.read", "trust.report"],
+            "created": true,
+            "public_key_hex": "a1b2c3...",
+            "private_key_hex": "d4e5f6...",
+            "warning": "Key pair auto-generated. Store private_key_hex securely."
+        }
     """
     # --- Rate limiting (before any DB work) ---
     _rl_agent_id: str | None = None
@@ -421,6 +435,21 @@ async def generate_agent_token(
         access_token: Signed JWT — pass this as access_token to other tools.
         expires_at: ISO 8601 UTC timestamp when the token expires.
         ttl_minutes: Actual TTL applied after clamping.
+
+    Example call:
+        generate_agent_token(
+            agent_id="550e8400-...",
+            private_key_hex="d4e5f6...",
+            ttl_minutes=60
+        )
+
+    Example response:
+        {
+            "access_token": "eyJ...",
+            "expires_at": "2026-03-20T13:00:00+00:00",
+            "ttl_minutes": 60,
+            "agent_id": "550e8400-..."
+        }
     """
     from datetime import UTC, timedelta
 

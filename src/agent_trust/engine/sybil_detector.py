@@ -207,6 +207,9 @@ class SybilDetector:
         The ring_reporting check only finds 2-agent mutual pairs.
         This method uses BFS to detect longer cycles in the success-report graph
         within the last 30 days. Cycles of length 3-6 are suspicious.
+
+        BFS is bounded to MAX_VISITED nodes to prevent OOM on large graphs.
+        If the limit is reached, a partial_scan flag is included in the evidence.
         """
         from collections import deque
 
@@ -214,6 +217,7 @@ class SybilDetector:
 
         cutoff = datetime.now(UTC) - timedelta(days=30)
         MAX_HOPS = 6
+        MAX_VISITED = 500  # cap BFS to prevent OOM on large connected components
 
         # Build outgoing success-report adjacency within 1-hop neighbourhood
         rows_result = await self.session.execute(
@@ -259,8 +263,20 @@ class SybilDetector:
                 queue.append((neighbour, [agent_uuid, neighbour]))
 
         shortest_cycle: list[uuid.UUID] | None = None
+        visited_count = 0
+        partial_scan = False
         while queue:
             current, path = queue.popleft()
+            visited_count += 1
+            if visited_count > MAX_VISITED:
+                partial_scan = True
+                log.warning(
+                    "cycle_bfs_truncated",
+                    agent_id=str(agent_uuid),
+                    visited=visited_count,
+                    max_visited=MAX_VISITED,
+                )
+                break
             if len(path) > MAX_HOPS + 1:
                 continue
             if current == agent_uuid and len(path) >= 3:
@@ -270,8 +286,25 @@ class SybilDetector:
                 if nxt not in path[1:] or nxt == agent_uuid:
                     queue.append((nxt, path + [nxt]))
 
-        if not shortest_cycle:
+        if not shortest_cycle and not partial_scan:
             return None
+
+        if not shortest_cycle and partial_scan:
+            # Couldn't complete scan — return low-severity advisory signal
+            return SybilSignal(
+                signal_type="ring_reporting",
+                severity=0.25,
+                description=(
+                    f"Cycle detection scan truncated after {MAX_VISITED} nodes — "
+                    "agent is in a large connected component of mutual reporters"
+                ),
+                evidence={
+                    "partial_scan": True,
+                    "visited_nodes": visited_count,
+                    "max_visited": MAX_VISITED,
+                    "cycle_node_count": len(neighbours),
+                },
+            )
 
         cycle_length = len(shortest_cycle) - 1  # edges in cycle
         severity = min(0.4 + (cycle_length - 2) * 0.1, 0.85)
@@ -282,7 +315,11 @@ class SybilDetector:
                 f"Positive-report cycle of length {cycle_length} detected "
                 f"in last 30 days (multi-hop ring)"
             ),
-            evidence={"cycle_length": cycle_length, "cycle_node_count": len(neighbours)},
+            evidence={
+                "cycle_length": cycle_length,
+                "cycle_node_count": len(neighbours),
+                "partial_scan": partial_scan,
+            },
         )
 
     async def _check_reporting_velocity(self, agent_uuid: uuid.UUID) -> SybilSignal | None:

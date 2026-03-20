@@ -20,6 +20,19 @@ async def sybil_check(agent_id: str) -> dict:
     and detailed signals with severity and evidence.
 
     No authentication required — this is a public safety tool.
+
+    Example call:
+        sybil_check(agent_id="550e8400-e29b-41d4-a716-446655440000")
+
+    Example response:
+        {
+            "agent_id": "550e8400-...",
+            "risk_score": 0.0,
+            "is_suspicious": false,
+            "is_high_risk": false,
+            "signals": [],
+            "checked_at": "2026-03-20T12:00:00+00:00"
+        }
     """
     async with get_session() as session:
         detector = SybilDetector(session)

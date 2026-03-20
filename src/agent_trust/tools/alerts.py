@@ -11,6 +11,7 @@ from agent_trust.auth.identity import AuthenticationError, AuthorizationError
 from agent_trust.auth.provider import require_scope
 from agent_trust.db.redis import get_redis
 from agent_trust.db.session import get_session
+from agent_trust.errors import tool_error
 from agent_trust.models import Agent, AlertSubscription
 
 log = structlog.get_logger()
@@ -57,19 +58,24 @@ async def subscribe_alerts(
         identity = await provider.authenticate(access_token=access_token)
         require_scope(identity, "trust.admin")
     except (AuthenticationError, AuthorizationError) as e:
-        return {"error": str(e)}
+        return tool_error(
+            "authentication_failed",
+            str(e),
+            hint="Provide a valid access_token with trust.admin scope.",
+        )
 
     # Validate callback tool length
     if len(callback_tool) > 100:
-        return {"error": "callback_tool name too long: maximum 100 characters"}
+        return tool_error("invalid_input", "callback_tool name too long: maximum 100 characters.")
 
     # Validate against allowlist
     if callback_tool not in PERMITTED_CALLBACK_TOOLS:
-        return {
-            "error": f"callback_tool '{callback_tool}' is not permitted. "
-            f"Allowed values: {sorted(PERMITTED_CALLBACK_TOOLS)}",
-            "permitted_tools": sorted(PERMITTED_CALLBACK_TOOLS),
-        }
+        return tool_error(
+            "invalid_input",
+            f"callback_tool '{callback_tool}' is not permitted.",
+            hint=f"Allowed values: {sorted(PERMITTED_CALLBACK_TOOLS)}.",
+            permitted_tools=sorted(PERMITTED_CALLBACK_TOOLS),
+        )
 
     # Validate threshold
     threshold_delta = max(0.01, min(1.0, threshold_delta))
@@ -78,13 +84,17 @@ async def subscribe_alerts(
         watched_uuid = uuid.UUID(watched_agent_id)
         subscriber_uuid = uuid.UUID(identity.agent_id)
     except ValueError as e:
-        return {"error": f"Invalid UUID: {e}"}
+        return tool_error("invalid_input", f"Invalid UUID: {e}")
 
     async with get_session() as session:
         # Verify watched agent exists
         result = await session.execute(select(Agent).where(Agent.agent_id == watched_uuid))
         if not result.scalar_one_or_none():
-            return {"error": f"Watched agent not found: {watched_agent_id}"}
+            return tool_error(
+                "not_found",
+                f"Watched agent not found: {watched_agent_id}",
+                hint="Verify the agent_id. The agent must be registered.",
+            )
 
         # Upsert subscription (unique per subscriber+watched pair)
         existing_result = await session.execute(

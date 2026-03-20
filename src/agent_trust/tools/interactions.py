@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from agent_trust.auth.identity import AuthenticationError, AuthorizationError
 from agent_trust.auth.provider import require_scope
 from agent_trust.db.session import get_session
+from agent_trust.errors import tool_error
 from agent_trust.models import Agent, Interaction
 
 log = structlog.get_logger()
@@ -70,24 +71,45 @@ async def report_interaction(
 
     Authentication via access_token:
     - AgentAuth token: obtain from agentauth.radi.pro
-    - Standalone signed JWT: generate with scripts/generate_agent_token.py
-      using your agent's private_key_hex from registration
+    - Standalone signed JWT: use generate_agent_token tool
 
     Returns interaction_id and whether the counterparty has also
     reported on this interaction (mutually_confirmed).
 
-    WARNING: The context field is stored as-is and returned to callers. If you
-    retrieve interaction history for LLM consumption, treat context as untrusted
-    input and sanitize before including in prompts. Detected injection patterns
-    are returned in the 'warnings' field of the response.
-
     Requires trust.report scope.
+
+    Example call:
+        report_interaction(
+            counterparty_id="550e8400-e29b-41d4-a716-446655440000",
+            interaction_type="transaction",
+            outcome="success",
+            access_token="eyJ...",
+            context={"amount": 100, "task_type": "code-review"}
+        )
+
+    Example response:
+        {
+            "interaction_id": "a1b2c3d4-...",
+            "reporter_id": "my-agent-uuid",
+            "counterparty_id": "550e8400-...",
+            "outcome": "success",
+            "mutually_confirmed": false,
+            "reported_at": "2026-03-20T12:00:00+00:00"
+        }
+
+    WARNING: The context field is stored as-is. Treat as untrusted
+    input — detected injection patterns are returned in 'warnings'.
     """
     try:
         identity = await _resolve_identity_for_interaction(access_token)
         require_scope(identity, "trust.report")
     except (AuthenticationError, AuthorizationError) as e:
-        return {"error": str(e)}
+        return tool_error(
+            "authentication_failed",
+            str(e),
+            hint="Provide a valid access_token with trust.report scope. "
+            "Use generate_agent_token to create one for standalone agents.",
+        )
 
     from agent_trust.ratelimit import check_rate_limit
 
@@ -97,17 +119,25 @@ async def report_interaction(
         trust_level=identity.trust_level,
     )
     if not rl_result.allowed:
-        return {
-            "error": "Rate limit exceeded",
-            "retry_after_seconds": rl_result.retry_after,
-        }
+        return tool_error(
+            "rate_limit_exceeded",
+            f"Too many requests. Limit is {rl_result.limit} per minute.",
+            hint="Wait and retry after the cooldown period.",
+            retry_after_seconds=rl_result.retry_after,
+        )
 
     if interaction_type not in VALID_INTERACTION_TYPES:
-        return {
-            "error": f"Invalid interaction_type. Must be one of: {sorted(VALID_INTERACTION_TYPES)}"
-        }
+        return tool_error(
+            "invalid_input",
+            f"Invalid interaction_type '{interaction_type}'.",
+            hint=f"Must be one of: {sorted(VALID_INTERACTION_TYPES)}.",
+        )
     if outcome not in VALID_OUTCOMES:
-        return {"error": f"Invalid outcome. Must be one of: {sorted(VALID_OUTCOMES)}"}
+        return tool_error(
+            "invalid_input",
+            f"Invalid outcome '{outcome}'.",
+            hint=f"Must be one of: {sorted(VALID_OUTCOMES)}.",
+        )
 
     # Change 3 — Fix #12: Context and evidence_hash size/format validation
     import json as _json
@@ -117,9 +147,23 @@ async def report_interaction(
         try:
             context_size = len(_json.dumps(context).encode("utf-8"))
         except (TypeError, ValueError):
-            return {"error": "context must be a JSON-serializable object"}
+            return tool_error(
+                "invalid_input",
+                "context must be a JSON-serializable object.",
+                hint=(
+                    "Ensure all values in context are JSON-compatible"
+                    " (strings, numbers, bools, lists, dicts)."
+                ),
+            )
         if context_size > 10240:
-            return {"error": f"context payload too large: {context_size} bytes (max 10240)"}
+            return tool_error(
+                "invalid_input",
+                f"context payload too large: {context_size} bytes (max 10240).",
+                hint=(
+                    "Reduce the context size. Include only essential"
+                    " metadata like amount, task_type, duration_ms."
+                ),
+            )
         from agent_trust.config import settings as _cfg
 
         injection_hits = _scan_for_injection(context, _cfg.context_injection_patterns)
@@ -134,16 +178,24 @@ async def report_interaction(
         import re
 
         if not re.fullmatch(r"[0-9a-fA-F]{64}", evidence_hash):
-            return {"error": "evidence_hash must be a valid SHA-256 hex string (64 hex characters)"}
+            return tool_error(
+                "invalid_input",
+                "evidence_hash must be a valid SHA-256 hex string (64 hex characters).",
+                hint="Compute SHA-256 of your evidence file and pass the hex digest.",
+            )
 
     try:
         reporter_uuid = uuid.UUID(identity.agent_id)
         counterparty_uuid = uuid.UUID(counterparty_id)
     except ValueError as e:
-        return {"error": f"Invalid UUID: {e}"}
+        return tool_error("invalid_input", f"Invalid UUID: {e}")
 
     if reporter_uuid == counterparty_uuid:
-        return {"error": "Cannot report an interaction with yourself"}
+        return tool_error(
+            "invalid_input",
+            "Cannot report an interaction with yourself.",
+            hint="The counterparty_id must be a different agent.",
+        )
 
     async with get_session() as session:
         reporter_result = await session.execute(
@@ -151,16 +203,22 @@ async def report_interaction(
         )
         reporter_agent = reporter_result.scalar_one_or_none()
         if not reporter_agent:
-            return {
-                "error": f"Your agent profile not found (id={identity.agent_id}). Register first."
-            }
+            return tool_error(
+                "not_found",
+                f"Your agent profile not found (id={identity.agent_id}).",
+                hint="Call register_agent first to create your profile.",
+            )
 
         counterparty_result = await session.execute(
             select(Agent).where(Agent.agent_id == counterparty_uuid)
         )
         counterparty_agent = counterparty_result.scalar_one_or_none()
         if not counterparty_agent:
-            return {"error": f"Counterparty agent not found (id={counterparty_id})"}
+            return tool_error(
+                "not_found",
+                f"Counterparty agent not found (id={counterparty_id}).",
+                hint="Verify the counterparty_id UUID. The counterparty must be registered.",
+            )
 
         # Change 1 — Fix #7: Per-pair daily interaction cap
         pair_cutoff = datetime.now(UTC) - timedelta(hours=24)
@@ -181,13 +239,19 @@ async def report_interaction(
         )
         pair_count = pair_count_result.scalar() or 0
         if pair_count >= 10:
-            return {
-                "error": (
-                    "Per-pair daily limit reached: maximum 10 interactions "
-                    "per agent pair per 24 hours"
+            return tool_error(
+                "limit_reached",
+                (
+                    "Per-pair daily limit reached: maximum 10"
+                    " interactions per agent pair per 24 hours."
                 ),
-                "pair_interaction_count": pair_count,
-            }
+                hint=(
+                    "Wait until the 24-hour window resets before"
+                    " reporting more interactions with this"
+                    " counterparty."
+                ),
+                pair_interaction_count=pair_count,
+            )
 
         # Change 2 — Fix #10: Duplicate interaction deduplication window
         dedup_cutoff = datetime.now(UTC) - timedelta(hours=1)
@@ -200,12 +264,18 @@ async def report_interaction(
             )
         )
         if dedup_result.scalar_one_or_none():
-            return {
-                "error": (
-                    "Duplicate interaction: same interaction type with this "
-                    "counterparty already reported within the last hour"
-                )
-            }
+            return tool_error(
+                "duplicate",
+                (
+                    "Same interaction type with this counterparty"
+                    " already reported within the last hour."
+                ),
+                hint=(
+                    "Wait at least 1 hour before reporting the same"
+                    " interaction type with this counterparty,"
+                    " or use a different interaction_type."
+                ),
+            )
 
         # Check reporting velocity — warn if this agent is filing many negative reports
         context_warnings: list[str] = []
@@ -345,28 +415,45 @@ async def get_interaction_history(
 
     # Change 4 — Fix #13: Require authentication for get_interaction_history
     if not access_token:
-        return {
-            "error": ("Authentication required: provide access_token to view interaction history")
-        }
+        return tool_error(
+            "authentication_required",
+            "Authentication required to view interaction history.",
+            hint=(
+                "Provide an access_token. Use generate_agent_token"
+                " for standalone agents or authenticate via AgentAuth."
+            ),
+        )
 
     try:
         from agent_trust.auth.resolve import resolve_identity
 
         await resolve_identity(access_token=access_token)
     except Exception as e:
-        return {"error": f"Authentication failed: {e}"}
+        return tool_error(
+            "authentication_failed",
+            f"Authentication failed: {e}",
+            hint="Verify your access_token is valid and not expired. Generate a new one if needed.",
+        )
 
     try:
         target_uuid = uuid.UUID(agent_id)
     except ValueError:
-        return {"error": f"Invalid agent_id UUID: {agent_id}"}
+        return tool_error(
+            "invalid_input",
+            f"Invalid agent_id UUID: {agent_id}",
+            hint="Provide a valid UUID string.",
+        )
 
     cutoff = datetime.now(UTC) - timedelta(days=since_days)
 
     async with get_session() as session:
         agent_result = await session.execute(select(Agent).where(Agent.agent_id == target_uuid))
         if not agent_result.scalar_one_or_none():
-            return {"error": f"Agent not found: {agent_id}"}
+            return tool_error(
+                "not_found",
+                f"Agent not found: {agent_id}",
+                hint="Verify the agent_id or register the agent first with register_agent.",
+            )
 
         query = select(Interaction).where(
             (Interaction.initiator_id == target_uuid)
@@ -376,12 +463,20 @@ async def get_interaction_history(
 
         if interaction_type:
             if interaction_type not in VALID_INTERACTION_TYPES:
-                return {"error": f"Invalid interaction_type: {interaction_type}"}
+                return tool_error(
+                    "invalid_input",
+                    f"Invalid interaction_type: {interaction_type}",
+                    hint=f"Must be one of: {sorted(VALID_INTERACTION_TYPES)}.",
+                )
             query = query.where(Interaction.interaction_type == interaction_type)
 
         if outcome:
             if outcome not in VALID_OUTCOMES:
-                return {"error": f"Invalid outcome: {outcome}"}
+                return tool_error(
+                    "invalid_input",
+                    f"Invalid outcome: {outcome}",
+                    hint=f"Must be one of: {sorted(VALID_OUTCOMES)}.",
+                )
             query = query.where(Interaction.outcome == outcome)
 
         query = query.order_by(Interaction.reported_at.desc()).limit(limit)
@@ -418,4 +513,261 @@ async def get_interaction_history(
             "interactions": items,
             "count": len(items),
             "since_days": since_days,
+        }
+
+
+async def list_pending_confirmations(
+    access_token: str,
+    since_days: int = 30,
+    limit: int = 50,
+) -> dict:
+    """List interactions reported by counterparties that await your confirmation.
+
+    When another agent reports an interaction involving you, it starts as
+    unconfirmed. Use confirm_interaction to confirm their report, which
+    boosts the mutual_confirmed flag and increases credibility weighting.
+
+    REQUIRES authentication (access_token with trust.read scope).
+
+    since_days: how far back to look (default 30, max 365)
+    limit: max results (default 50, max 200)
+
+    Example call:
+        list_pending_confirmations(access_token="eyJ...")
+
+    Example response:
+        {
+            "agent_id": "my-uuid",
+            "pending": [
+                {
+                    "interaction_id": "a1b2c3d4-...",
+                    "reported_by": "counterparty-uuid",
+                    "interaction_type": "transaction",
+                    "outcome": "success",
+                    "reported_at": "2026-03-20T12:00:00+00:00"
+                }
+            ],
+            "count": 1
+        }
+    """
+    from agent_trust.auth.resolve import resolve_identity
+
+    try:
+        identity = await resolve_identity(access_token=access_token)
+    except Exception as e:
+        return tool_error(
+            "authentication_failed",
+            str(e),
+            hint="Provide a valid access_token. Use generate_agent_token for standalone agents.",
+        )
+
+    since_days = min(max(1, since_days), 365)
+    limit = min(max(1, limit), 200)
+
+    try:
+        my_uuid = uuid.UUID(identity.agent_id)
+    except ValueError:
+        return tool_error("invalid_input", f"Invalid agent_id: {identity.agent_id}")
+
+    cutoff = datetime.now(UTC) - timedelta(days=since_days)
+
+    async with get_session() as session:
+        # Find interactions where:
+        # - I am a party (initiator or counterparty)
+        # - Reported by the OTHER party (not me)
+        # - Not yet mutually confirmed
+        from sqlalchemy import or_
+
+        query = (
+            select(Interaction)
+            .where(
+                or_(
+                    Interaction.initiator_id == my_uuid,
+                    Interaction.counterparty_id == my_uuid,
+                ),
+                Interaction.reported_by != my_uuid,
+                Interaction.mutually_confirmed == False,  # noqa: E712
+                Interaction.reported_at >= cutoff,
+            )
+            .order_by(Interaction.reported_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        interactions = result.scalars().all()
+
+        pending = []
+        for ix in interactions:
+            # Check that I haven't already filed my own report for the same interaction pair+type
+            my_report_result = await session.execute(
+                select(Interaction).where(
+                    Interaction.reported_by == my_uuid,
+                    Interaction.counterparty_id == ix.reported_by,
+                    Interaction.interaction_type == ix.interaction_type,
+                    Interaction.reported_at >= ix.reported_at - timedelta(hours=2),
+                    Interaction.reported_at <= ix.reported_at + timedelta(hours=2),
+                )
+            )
+            if my_report_result.scalar_one_or_none():
+                continue  # already reported my side
+
+            pending.append(
+                {
+                    "interaction_id": str(ix.interaction_id),
+                    "reported_by": str(ix.reported_by),
+                    "interaction_type": ix.interaction_type,
+                    "outcome": ix.outcome,
+                    "reported_at": ix.reported_at.isoformat(),
+                }
+            )
+
+        return {
+            "agent_id": identity.agent_id,
+            "pending": pending,
+            "count": len(pending),
+            "since_days": since_days,
+        }
+
+
+async def confirm_interaction(
+    interaction_id: str,
+    outcome: str,
+    access_token: str,
+    context: dict | None = None,
+) -> dict:
+    """Confirm a counterparty's interaction report by filing your side.
+
+    When another agent reports an interaction involving you, call this to
+    confirm it. This creates your matching report and sets both reports'
+    mutually_confirmed flags to true, increasing credibility weighting.
+
+    You can agree with the counterparty's outcome or report a different one.
+    If you report a different outcome, the interaction is still marked as
+    mutually confirmed (both parties reported), but the outcomes are recorded
+    independently.
+
+    REQUIRES authentication (access_token with trust.report scope).
+
+    Example call:
+        confirm_interaction(
+            interaction_id="a1b2c3d4-...",
+            outcome="success",
+            access_token="eyJ..."
+        )
+
+    Example response:
+        {
+            "confirmed": true,
+            "interaction_id": "a1b2c3d4-...",
+            "your_report_id": "e5f6a7b8-...",
+            "mutually_confirmed": true,
+            "outcome_match": true
+        }
+    """
+    from agent_trust.auth.provider import require_scope
+    from agent_trust.auth.resolve import resolve_identity
+
+    try:
+        identity = await resolve_identity(access_token=access_token)
+        require_scope(identity, "trust.report")
+    except Exception as e:
+        return tool_error(
+            "authentication_failed",
+            str(e),
+            hint="Provide a valid access_token with trust.report scope.",
+        )
+
+    if outcome not in VALID_OUTCOMES:
+        return tool_error(
+            "invalid_input",
+            f"Invalid outcome '{outcome}'.",
+            hint=f"Must be one of: {sorted(VALID_OUTCOMES)}.",
+        )
+
+    try:
+        interaction_uuid = uuid.UUID(interaction_id)
+        my_uuid = uuid.UUID(identity.agent_id)
+    except ValueError as e:
+        return tool_error("invalid_input", f"Invalid UUID: {e}")
+
+    async with get_session() as session:
+        # Find the original interaction
+        ix_result = await session.execute(
+            select(Interaction).where(Interaction.interaction_id == interaction_uuid)
+        )
+        original = ix_result.scalar_one_or_none()
+        if not original:
+            return tool_error(
+                "not_found",
+                f"Interaction not found: {interaction_id}",
+                hint=(
+                    "Use list_pending_confirmations to find"
+                    " interactions awaiting your confirmation."
+                ),
+            )
+
+        # Verify I am a party but not the reporter
+        if my_uuid not in (original.initiator_id, original.counterparty_id):
+            return tool_error(
+                "authorization_failed",
+                "You are not a party to this interaction.",
+                hint=(
+                    "You can only confirm interactions where you are"
+                    " the initiator or counterparty."
+                ),
+            )
+
+        if original.reported_by == my_uuid:
+            return tool_error(
+                "invalid_input",
+                "You reported this interaction — the counterparty needs to confirm it.",
+                hint="Share the interaction_id with your counterparty so they can confirm.",
+            )
+
+        if original.mutually_confirmed:
+            return tool_error(
+                "duplicate",
+                "This interaction is already mutually confirmed.",
+            )
+
+        # Create my confirming report
+        counterparty_uuid = original.reported_by
+        my_report = Interaction(
+            interaction_id=uuid.uuid4(),
+            initiator_id=my_uuid,
+            counterparty_id=counterparty_uuid,
+            interaction_type=original.interaction_type,
+            outcome=outcome,
+            context=context or {},
+            reported_by=my_uuid,
+            mutually_confirmed=True,
+            reported_at=datetime.now(UTC),
+        )
+        session.add(my_report)
+
+        # Mark the original as mutually confirmed
+        original.mutually_confirmed = True
+
+        await session.flush()
+
+        log.info(
+            "interaction_confirmed",
+            original_id=str(original.interaction_id),
+            confirming_id=str(my_report.interaction_id),
+            confirmer=identity.agent_id,
+            reporter=str(counterparty_uuid),
+        )
+
+        try:
+            await _enqueue_score_recomputation(my_uuid, counterparty_uuid)
+        except Exception as e:
+            log.warning("score_recompute_enqueue_failed", error=str(e))
+
+        return {
+            "confirmed": True,
+            "interaction_id": interaction_id,
+            "your_report_id": str(my_report.interaction_id),
+            "mutually_confirmed": True,
+            "outcome_match": outcome == original.outcome,
+            "your_outcome": outcome,
+            "counterparty_outcome": original.outcome,
         }

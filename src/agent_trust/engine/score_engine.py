@@ -323,6 +323,56 @@ class ScoreComputation:
         return result.scalar() or 0
 
 
+def explain_score(score: float, confidence: float, breakdown: dict) -> str:
+    """Generate a human/LLM-readable explanation of a trust score.
+
+    Summarizes the key factors behind the score in plain language,
+    helping agents reason about whether to trust a counterparty.
+    """
+    parts: list[str] = []
+
+    n = breakdown.get("interactions_weighted", 0)
+
+    # Overall assessment
+    if confidence < 0.15:
+        parts.append(
+            f"Score {score:.2f} with very low confidence ({confidence:.2f}) — "
+            "too few interactions to draw conclusions. Treat as 'unknown'."
+        )
+    elif score >= 0.8:
+        parts.append(f"High trust score ({score:.2f}) with {n} interaction(s).")
+    elif score >= 0.6:
+        parts.append(f"Moderate trust score ({score:.2f}) with {n} interaction(s).")
+    elif score >= 0.4:
+        parts.append(f"Below-average trust score ({score:.2f}) with {n} interaction(s).")
+    else:
+        parts.append(f"Low trust score ({score:.2f}) with {n} interaction(s).")
+
+    # Dispute impact
+    lost = breakdown.get("lost_disputes", 0)
+    penalty = breakdown.get("dispute_penalty", 1.0)
+    if lost > 0:
+        parts.append(f"{lost} upheld dispute(s) apply a {(1.0 - penalty):.0%} penalty.")
+
+    dismissed = breakdown.get("dismissed_disputes_filed", 0)
+    dismissed_penalty = breakdown.get("dismissed_penalty", 1.0)
+    if dismissed > 0:
+        parts.append(
+            f"Filed {dismissed} dismissed dispute(s), reducing own score by "
+            f"{(1.0 - dismissed_penalty):.1%}."
+        )
+
+    # Bayesian factors
+    alpha = breakdown.get("alpha", 2.0)
+    beta = breakdown.get("beta", 2.0)
+    if alpha > 2.0 and beta <= 2.5:
+        parts.append("Predominantly positive interactions.")
+    elif beta > alpha:
+        parts.append("More negative than positive interactions weighted by recency.")
+
+    return " ".join(parts)
+
+
 async def upsert_trust_score(
     trust_score: TrustScore,
     session: AsyncSession,

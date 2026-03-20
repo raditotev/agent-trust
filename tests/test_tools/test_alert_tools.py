@@ -285,7 +285,13 @@ async def test_dispatch_alerts_dispatches_when_threshold_exceeded():
     mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
     mock_ctx.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("agent_trust.db.session.get_session", return_value=mock_ctx):
+    with (
+        patch("agent_trust.db.session.get_session", return_value=mock_ctx),
+        patch(
+            "agent_trust.workers.alert_dispatcher._deliver_alert_via_redis",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
         result = await dispatch_alerts({}, agent_id, 0.60, 0.80)
 
     assert result["alerts_dispatched"] == 1

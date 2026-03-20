@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import arq
 import arq.connections
 
 from agent_trust.config import settings
@@ -12,12 +13,18 @@ from agent_trust.workers.score_recomputer import recompute_score
 class WorkerSettings:
     """arq worker configuration."""
 
-    functions = [recompute_score, dispatch_alerts]
+    functions = [
+        arq.func(recompute_score, name="recompute_score", max_tries=3, timeout=120),
+        arq.func(dispatch_alerts, name="dispatch_alerts", max_tries=3, timeout=60),
+    ]
     cron_jobs = [
-        # Run decay refresh nightly at 2am UTC
-        # arq.cron(refresh_all_scores, hour=2, minute=0),
-        # Run attestation expiry every hour
-        # arq.cron(expire_attestations, minute=0),
+        arq.cron(refresh_all_scores, hour=2, minute=0),
+        arq.cron(expire_attestations, minute=0),
     ]
 
     redis_settings = arq.connections.RedisSettings.from_dsn(settings.redis_url)
+
+    # Retry backoff: 10s, 30s, 90s
+    retry_jobs = True
+    max_jobs = 20
+    job_timeout = 120
