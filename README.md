@@ -1,297 +1,785 @@
 # AgentTrust
 
-**AgentTrust** is a pure MCP-only reputation and trust scoring server for AI agents. It provides cryptographically-signed trust scores, interaction history, dispute resolution, and issuance attestation all via the Model Context Protocol. No REST API.
+Reputation and trust scoring service for AI agents, exposed entirely as an [MCP](https://modelcontextprotocol.io/) server. Evaluate counterparties before transacting, report interaction outcomes, issue portable trust certificates, and detect Sybil attacks.
 
-## Quick Start
+## Table of Contents
+
+- [Quickstart](#quickstart)
+- [Connecting to the MCP Server](#connecting-to-the-mcp-server)
+- [Authentication](#authentication)
+- [Tools Reference](#tools-reference)
+  - [Discovery](#discovery)
+  - [Agent Management](#agent-management)
+  - [Trust Scoring](#trust-scoring)
+  - [Interaction Reporting](#interaction-reporting)
+  - [Disputes](#disputes)
+  - [Attestations](#attestations)
+  - [Sybil Detection](#sybil-detection)
+- [Resources](#resources)
+- [Prompts](#prompts)
+- [Score Types](#score-types)
+- [Rate Limits](#rate-limits)
+- [Self-Hosting](#self-hosting)
+
+---
+
+## Quickstart
+
+### 1. Connect to the MCP server
+
+Add AgentTrust to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "agent-trust": {
+      "url": "https://agenttrust.radi.pro/mcp"
+    }
+  }
+}
+```
+
+Or for local development via stdio:
+
+```json
+{
+  "mcpServers": {
+    "agent-trust": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "agent_trust.server"]
+    }
+  }
+}
+```
+
+### 2. Register your agent
+
+```
+register_agent(display_name="my-agent", capabilities=["search", "summarize"])
+```
+
+Response:
+
+```json
+{
+  "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+  "source": "standalone",
+  "scopes": ["trust.read", "trust.report"],
+  "created": true,
+  "public_key_hex": "a1b2c3...",
+  "private_key_hex": "d4e5f6...",
+  "warning": "Key pair auto-generated. Store private_key_hex securely."
+}
+```
+
+**Store the `private_key_hex` immediately** -- it is shown only once.
+
+### 3. Generate an access token
+
+```
+generate_agent_token(
+  agent_id="550e8400-...",
+  private_key_hex="d4e5f6..."
+)
+```
+
+Response:
+
+```json
+{
+  "access_token": "eyJ...",
+  "expires_at": "2026-03-20T13:00:00+00:00",
+  "ttl_minutes": 60,
+  "agent_id": "550e8400-..."
+}
+```
+
+### 4. Check trust before transacting
+
+```
+check_trust(agent_id="counterparty-uuid")
+```
+
+### 5. Report interaction outcomes
+
+```
+report_interaction(
+  counterparty_id="counterparty-uuid",
+  interaction_type="transaction",
+  outcome="success",
+  access_token="eyJ..."
+)
+```
+
+Both parties should report for mutual confirmation (higher credibility).
+
+---
+
+## Connecting to the MCP Server
+
+AgentTrust supports two MCP transports:
+
+| Transport | Use case | Endpoint |
+|-----------|----------|----------|
+| **Streamable HTTP** | Remote agents, production | `https://agenttrust.radi.pro/mcp` |
+| **stdio** | Local development, MCP Inspector | `uv run python -m agent_trust.server` |
+
+---
+
+## Authentication
+
+AgentTrust supports two authentication methods. Many tools work without authentication, but reporting interactions, filing disputes, and issuing attestations require it.
+
+### AgentAuth (preferred)
+
+Obtain a bearer token from [AgentAuth](https://agentauth.radi.pro) and pass it as `access_token`. This provides the full set of scopes:
+
+| Scope | Grants |
+|-------|--------|
+| `trust.read` | Score breakdowns, pending confirmations |
+| `trust.report` | Report and confirm interactions |
+| `trust.dispute.file` | File disputes |
+| `trust.dispute.resolve` | Resolve disputes (arbitrators) |
+| `trust.attest.issue` | Issue signed attestations |
+| `trust.admin` | Alert subscriptions |
+
+### Standalone (Ed25519)
+
+Register with `register_agent` and generate tokens with `generate_agent_token`. Provides `trust.read` and `trust.report` scopes. You can upgrade to AgentAuth later via `link_agentauth`.
+
+### No authentication
+
+Tools marked as "Auth: none" work without any token. Useful for checking trust scores and verifying attestations.
+
+---
+
+## Tools Reference
+
+### Discovery
+
+#### `discover`
+
+**Auth:** none
+
+Returns the complete service catalog: available tools, auth methods, score types, interaction types, rate limits, and a quickstart guide. Call this first when connecting.
+
+```
+discover()
+```
+
+---
+
+### Agent Management
+
+#### `register_agent`
+
+**Auth:** none
+
+Register a new agent in the trust network. Three paths:
+
+1. **AgentAuth** -- pass `access_token` from AgentAuth
+2. **Standalone** -- pass your own `public_key_hex` (hex-encoded Ed25519 public key)
+3. **Auto-generate** -- omit both to get a keypair generated for you
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `display_name` | string | no | Human-readable name (max 200 chars) |
+| `capabilities` | list[string] | no | Tags like `["search", "code-review"]` (max 50) |
+| `metadata` | dict | no | Arbitrary key-value data (max 10KB) |
+| `access_token` | string | no | AgentAuth bearer token |
+| `public_key_hex` | string | no | Hex-encoded Ed25519 public key |
+
+```
+register_agent(
+  display_name="my-search-agent",
+  capabilities=["search", "summarize"]
+)
+```
+
+#### `generate_agent_token`
+
+**Auth:** none (uses private key directly)
+
+Generate a signed JWT access token for standalone agents.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_id` | string | yes | UUID from `register_agent` |
+| `private_key_hex` | string | yes | 64 hex chars, Ed25519 private key |
+| `ttl_minutes` | int | no | Token lifetime, default 60, max 1440 |
+
+```
+generate_agent_token(
+  agent_id="550e8400-...",
+  private_key_hex="d4e5f6...",
+  ttl_minutes=120
+)
+```
+
+#### `whoami`
+
+**Auth:** required
+
+Check your identity, current trust scores, and scopes.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `access_token` | string | no | AgentAuth bearer token |
+| `public_key_hex` | string | no | Hex-encoded public key |
+
+```
+whoami(access_token="eyJ...")
+```
+
+#### `get_agent_profile`
+
+**Auth:** none (authenticated calls get extra detail)
+
+Retrieve the public profile for any agent.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_id` | string | yes | UUID to look up |
+| `access_token` | string | no | For additional details |
+
+```
+get_agent_profile(agent_id="550e8400-...")
+```
+
+#### `search_agents`
+
+**Auth:** none
+
+Search agents by trust score, capabilities, and interaction count.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `min_score` | float | no | Minimum score 0.0-1.0 (default 0.0) |
+| `score_type` | string | no | `overall`, `reliability`, `responsiveness`, `honesty`, or `domain:*` |
+| `capabilities` | list[string] | no | Required capabilities (must have ALL) |
+| `min_interactions` | int | no | Minimum interaction count |
+| `limit` | int | no | Max results, default 20, max 100 |
+
+```
+search_agents(min_score=0.7, capabilities=["code-review"], limit=10)
+```
+
+#### `link_agentauth`
+
+**Auth:** required (AgentAuth token)
+
+Link an existing standalone profile to an AgentAuth identity, merging interaction history.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `access_token` | string | yes | AgentAuth bearer token |
+| `public_key_hex` | string | yes | Public key from standalone registration |
+| `signed_proof` | string | yes | JWT signed with private key (claims: `sub`, `action`, `iat`) |
+
+---
+
+### Trust Scoring
+
+#### `check_trust`
+
+**Auth:** none (authenticated calls with `trust.read` scope get `factor_breakdown`)
+
+Primary tool for evaluating an agent before a transaction. Returns a score (0.0-1.0), confidence (0.0-1.0), interaction count, and a plain-language explanation.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_id` | string | yes | UUID to evaluate |
+| `score_type` | string | no | Default `overall` |
+| `access_token` | string | no | For factor breakdown |
+
+```
+check_trust(agent_id="550e8400-...", score_type="reliability")
+```
+
+Response:
+
+```json
+{
+  "agent_id": "550e8400-...",
+  "score_type": "reliability",
+  "score": 0.82,
+  "confidence": 0.71,
+  "interaction_count": 15,
+  "explanation": "High trust score with 15 interactions. Mostly positive.",
+  "computed_at": "2026-03-20T12:00:00+00:00"
+}
+```
+
+> A score of 0.5 with confidence 0.05 means "unknown", not "average". Low confidence means few interactions -- treat with caution.
+
+#### `check_trust_batch`
+
+**Auth:** none
+
+Check trust scores for up to 20 agents in a single call.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_ids` | list[string] | yes | Up to 20 UUIDs |
+| `score_type` | string | no | Default `overall` |
+
+```
+check_trust_batch(agent_ids=["uuid-1", "uuid-2", "uuid-3"])
+```
+
+#### `compare_agents`
+
+**Auth:** none
+
+Rank up to 10 agents side-by-side by score.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_ids` | list[string] | yes | Up to 10 UUIDs |
+| `score_type` | string | no | Default `overall` |
+
+```
+compare_agents(agent_ids=["uuid-1", "uuid-2"], score_type="honesty")
+```
+
+#### `get_score_breakdown`
+
+**Auth:** required (`trust.read` scope)
+
+Detailed Bayesian factors behind a score: raw score, dispute penalty, alpha/beta parameters, interaction weights.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_id` | string | yes | UUID |
+| `access_token` | string | yes | Token with `trust.read` scope |
+
+```
+get_score_breakdown(agent_id="550e8400-...", access_token="eyJ...")
+```
+
+---
+
+### Interaction Reporting
+
+#### `report_interaction`
+
+**Auth:** required (`trust.report` scope)
+
+Report the outcome of an interaction with another agent. Both parties should report for mutual confirmation -- one-sided reports carry less weight.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `counterparty_id` | string | yes | UUID of the other agent |
+| `interaction_type` | string | yes | `transaction`, `delegation`, `query`, or `collaboration` |
+| `outcome` | string | yes | `success`, `failure`, `timeout`, or `partial` |
+| `access_token` | string | yes | Token with `trust.report` scope |
+| `context` | dict | no | Metadata like `{"amount": 100, "task_type": "code-review"}` (max 10KB) |
+| `evidence_hash` | string | no | SHA-256 hex hash of supporting evidence (64 chars) |
+
+```
+report_interaction(
+  counterparty_id="550e8400-...",
+  interaction_type="transaction",
+  outcome="success",
+  access_token="eyJ...",
+  context={"amount": 100, "task_type": "code-review"}
+)
+```
+
+Response:
+
+```json
+{
+  "interaction_id": "a1b2c3d4-...",
+  "reporter_id": "my-agent-uuid",
+  "counterparty_id": "550e8400-...",
+  "outcome": "success",
+  "mutually_confirmed": false,
+  "reported_at": "2026-03-20T12:00:00+00:00"
+}
+```
+
+#### `confirm_interaction`
+
+**Auth:** required (`trust.report` scope)
+
+Confirm a counterparty's interaction report. Creates mutual confirmation, which increases the report's weight in score computation.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `interaction_id` | string | yes | UUID from the other agent's `report_interaction` |
+| `outcome` | string | yes | Your view: `success`, `failure`, `timeout`, or `partial` |
+| `access_token` | string | yes | Token with `trust.report` scope |
+| `context` | dict | no | Additional context from your perspective |
+
+```
+confirm_interaction(
+  interaction_id="a1b2c3d4-...",
+  outcome="success",
+  access_token="eyJ..."
+)
+```
+
+#### `list_pending_confirmations`
+
+**Auth:** required
+
+List interactions reported by other agents that await your confirmation.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `access_token` | string | yes | Your access token |
+| `since_days` | int | no | Lookback window, default 30, max 365 |
+| `limit` | int | no | Max results, default 50, max 200 |
+
+```
+list_pending_confirmations(access_token="eyJ...")
+```
+
+#### `get_interaction_history`
+
+**Auth:** required
+
+Retrieve interaction history for an agent.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_id` | string | yes | UUID |
+| `interaction_type` | string | no | Filter by type |
+| `outcome` | string | no | Filter by outcome |
+| `since_days` | int | no | Lookback window, default 90, max 365 |
+| `limit` | int | no | Max results, default 50, max 200 |
+| `access_token` | string | yes | Your access token |
+
+```
+get_interaction_history(
+  agent_id="550e8400-...",
+  interaction_type="transaction",
+  since_days=30,
+  access_token="eyJ..."
+)
+```
+
+---
+
+### Disputes
+
+#### `file_dispute`
+
+**Auth:** required (`trust.dispute.file` scope)
+
+Challenge an interaction outcome you believe was reported incorrectly.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `interaction_id` | string | yes | UUID of the disputed interaction |
+| `reason` | string | yes | Explanation (max 5000 chars) |
+| `access_token` | string | yes | Token with `trust.dispute.file` scope |
+| `evidence` | dict | no | Supporting evidence (max 10KB) |
+
+```
+file_dispute(
+  interaction_id="a1b2c3d4-...",
+  reason="The task was completed successfully but reported as failure",
+  access_token="eyJ..."
+)
+```
+
+Limits: max 10 disputes per day, max 30 open disputes at once. Agents with 5+ dismissed disputes are blocked from filing new ones (24h cooldown after each dismissal).
+
+#### `resolve_dispute`
+
+**Auth:** required (`trust.dispute.resolve` scope, arbitrators only)
+
+Resolve an open dispute. Requires AgentAuth permission check.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `dispute_id` | string | yes | UUID of the dispute |
+| `resolution` | string | yes | `upheld`, `dismissed`, or `split` |
+| `access_token` | string | yes | Arbitrator's token |
+| `resolution_note` | string | no | Explanation (max 2000 chars) |
+
+```
+resolve_dispute(
+  dispute_id="d1e2f3...",
+  resolution="upheld",
+  access_token="eyJ...",
+  resolution_note="Evidence confirms task was completed"
+)
+```
+
+---
+
+### Attestations
+
+#### `issue_attestation`
+
+**Auth:** required (`trust.attest.issue` scope)
+
+Issue a portable, Ed25519-signed JWT capturing an agent's current trust scores. The agent can present this to third parties who verify the signature without querying AgentTrust.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_id` | string | yes | UUID of the agent to attest |
+| `access_token` | string | yes | Token with `trust.attest.issue` scope |
+| `ttl_hours` | int | no | Validity period, default 12, range 1-72 |
+
+```
+issue_attestation(
+  agent_id="550e8400-...",
+  access_token="eyJ...",
+  ttl_hours=24
+)
+```
+
+Response:
+
+```json
+{
+  "attestation_id": "b1c2d3e4-...",
+  "subject_agent_id": "550e8400-...",
+  "jwt_token": "eyJ...",
+  "score_snapshot": {
+    "overall": {"score": 0.82, "confidence": 0.71},
+    "reliability": {"score": 0.85, "confidence": 0.65}
+  },
+  "valid_from": "2026-03-20T12:00:00+00:00",
+  "valid_until": "2026-03-21T12:00:00+00:00"
+}
+```
+
+#### `verify_attestation`
+
+**Auth:** none
+
+Verify an attestation JWT's signature, expiry, and revocation status. No authentication needed -- this is designed for third-party verification.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `jwt_token` | string | yes | JWT from `issue_attestation` |
+
+```
+verify_attestation(jwt_token="eyJ...")
+```
+
+Response:
+
+```json
+{
+  "valid": true,
+  "attestation_id": "b1c2d3e4-...",
+  "subject_agent_id": "550e8400-...",
+  "score_snapshot": {"overall": {"score": 0.82, "confidence": 0.71}},
+  "issued_at": "2026-03-20T12:00:00+00:00",
+  "valid_until": "2026-03-21T12:00:00+00:00",
+  "seconds_remaining": 43200
+}
+```
+
+---
+
+### Sybil Detection
+
+#### `sybil_check`
+
+**Auth:** none
+
+Detect potential Sybil behavior: ring reporting (mutual positive feedback loops), burst registration (many agents in a short window), and suspicious delegation chains.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent_id` | string | yes | UUID to check |
+
+```
+sybil_check(agent_id="550e8400-...")
+```
+
+Response:
+
+```json
+{
+  "agent_id": "550e8400-...",
+  "risk_score": 0.15,
+  "is_suspicious": false,
+  "is_high_risk": false,
+  "signals": [],
+  "checked_at": "2026-03-20T12:00:00+00:00"
+}
+```
+
+When signals are detected:
+
+```json
+{
+  "signals": [
+    {
+      "signal_type": "ring_reporting",
+      "severity": "high",
+      "description": "Mutual positive feedback loop detected",
+      "evidence": {"ring_size": 3, "agents": ["uuid-1", "uuid-2", "uuid-3"]}
+    }
+  ]
+}
+```
+
+---
+
+## Resources
+
+MCP resources provide read-only access to trust data via URI templates:
+
+| URI | Description |
+|-----|-------------|
+| `trust://agents/{agent_id}/score` | Current trust scores in all categories |
+| `trust://agents/{agent_id}/history` | Interaction history summary (last 90 days) |
+| `trust://agents/{agent_id}/attestations` | Active (non-expired, non-revoked) attestations |
+| `trust://leaderboard/{score_type}` | Top 50 agents ranked by score type |
+| `trust://disputes/{dispute_id}` | Full details of a specific dispute |
+| `trust://health` | Service health: DB, Redis, AgentAuth, worker queue |
+
+---
+
+## Prompts
+
+Pre-built prompt templates for common evaluation workflows:
+
+| Prompt | Parameters | Description |
+|--------|------------|-------------|
+| `evaluate_counterparty_prompt` | `agent_id`, `transaction_value`, `transaction_type` | Structured evaluation before a transaction |
+| `explain_score_change_prompt` | `agent_id` | Investigate why a trust score changed |
+| `dispute_assessment_prompt` | `dispute_id` | Structured assessment for dispute arbitration |
+
+---
+
+## Score Types
+
+| Type | Based on | Description |
+|------|----------|-------------|
+| `overall` | All interaction types | Composite score |
+| `reliability` | Transaction, delegation, collaboration | Does the agent deliver? |
+| `responsiveness` | Query, delegation | Does the agent respond timely? |
+| `honesty` | Collaboration | Is the agent truthful? |
+| `domain:*` | Custom | Domain-specific scores (e.g., `domain:code-review`) |
+
+Scores use a **Bayesian Beta distribution** with exponential time decay (90-day half-life) and dispute penalties. Scores range from 0.0 to 1.0, paired with a confidence value:
+
+- **High score + high confidence** = trustworthy, well-established agent
+- **High score + low confidence** = looks good but too few interactions to be sure
+- **0.5 score + near-zero confidence** = unknown agent (prior), not "average"
+
+---
+
+## Rate Limits
+
+Requests are rate-limited per agent per minute, with higher limits for more trusted agents:
+
+| Trust Level | Requests/min |
+|-------------|-------------|
+| Root (AgentAuth) | 120 |
+| Delegated | 90 |
+| Standalone | 60 |
+| Ephemeral | 30 |
+| Unauthenticated | 10 |
+
+Additional limits on specific operations:
+- **Interaction reports:** max 10 per pair per day, 1 per type per pair per hour
+- **Disputes filed:** max 10 per day, max 30 open at once
+- **Dispute targets:** max 10 open disputes per target
+
+---
+
+## Self-Hosting
+
+### Prerequisites
+
+- Python 3.13+
+- PostgreSQL 16
+- Redis 7
+- [uv](https://docs.astral.sh/uv/) package manager
+
+### Setup
 
 ```bash
-cp .env.example .env
+# Clone and install
+git clone <repo-url>
+cd agent-trust
 uv sync
-docker compose up -d postgres redis
-uv run alembic upgrade head
-uv run python scripts/generate_keypair.py   # first time only
-uv run python scripts/register_scopes.py   # register trust.* scopes in AgentAuth
 
-# Run server (stdio — for local testing with MCP Inspector)
+# Start infrastructure
+docker compose up -d postgres redis
+
+# Generate server signing key (first time only)
+uv run python scripts/generate_keypair.py
+
+# Run database migrations
+uv run alembic upgrade head
+
+# (Optional) Register scopes with AgentAuth
+AGENTAUTH_ACCESS_TOKEN=<token> uv run python scripts/register_scopes.py
+```
+
+### Environment Variables
+
+Create a `.env` file:
+
+```bash
+DATABASE_URL=postgresql+asyncpg://agent_trust:agent_trust@localhost:5432/agent_trust
+REDIS_URL=redis://localhost:6379/0
+SIGNING_KEY_PATH=keys/service.key
+
+# Auth: "agentauth", "standalone", or "both" (default: both)
+AUTH_PROVIDER=both
+AGENTAUTH_MCP_URL=https://agentauth.radi.pro/mcp
+AGENTAUTH_ACCESS_TOKEN=<your-token>
+
+# Scoring
+SCORE_HALF_LIFE_DAYS=90
+DISPUTE_PENALTY=0.03
+ATTESTATION_TTL_HOURS=24
+
+# Transport: "stdio" or "streamable-http"
+MCP_TRANSPORT=stdio
+MCP_PORT=8000
+
+# Production
+ENVIRONMENT=development  # set to "production" to bind 0.0.0.0
+LOG_LEVEL=INFO
+JSON_LOGS=false
+```
+
+### Running
+
+```bash
+# Local development (stdio)
 uv run python -m agent_trust.server
 
-# Run server (Streamable HTTP — for remote agents)
+# Production (HTTP)
 uv run python -m agent_trust.server --transport streamable-http --port 8000
 
-# Run background workers (score recomputation, decay, expiry)
+# Background worker (score recomputation, attestation expiry)
 uv run python scripts/run_worker.py
 
 # Test with MCP Inspector
 uv run mcp dev src/agent_trust/server.py
 ```
 
-## Architecture
+### Docker
 
-AgentTrust is a **pure MCP server** — all functionality is exposed as MCP tools, resources, and prompts. There are no HTTP endpoints beyond the MCP transport itself.
-
-```
-AI Agent
-   │  (MCP client)
-   ▼
-AgentTrust MCP Server
-   ├── Tools (actions)
-   ├── Resources (read-only data)
-   └── Prompts (LLM reasoning templates)
-   │
-   ├── PostgreSQL + TimescaleDB  (interactions, scores, disputes, attestations)
-   ├── Redis                     (score cache, introspection cache, rate limits)
-   ├── arq workers               (score recomputation, decay refresh, expiry)
-   └── AgentAuth MCP             (token introspection, RBAC, trust levels)
-        (agentauth.radi.pro/mcp)
-```
-
-**Key design decisions:**
-
-- All interactions are immutable append-only events
-- Scores are recomputed asynchronously via arq workers
-- AgentTrust connects to AgentAuth as an MCP _client_ — dogfooding MCP-first philosophy
-- Token introspection results cached in Redis (SHA-256 key, TTL = min(token_expiry, 300s))
-- Attestations are portable Ed25519-signed JWTs
-
-## MCP Tools
-
-### Agent Management
-
-| Tool                | Scope Required | Description                                  |
-| ------------------- | -------------- | -------------------------------------------- |
-| `register_agent`    | none           | Register a new agent and get an agent_id     |
-| `link_agentauth`    | none           | Link an AgentAuth token to an existing agent |
-| `whoami`            | none           | Get your own agent identity                  |
-| `get_agent_profile` | none           | Get public profile for any agent             |
-| `search_agents`     | none           | Search agents by name or description         |
-
-### Trust Scoring
-
-| Tool                  | Scope Required       | Description                         |
-| --------------------- | -------------------- | ----------------------------------- |
-| `check_trust`         | none (optional auth) | Get trust score for an agent        |
-| `get_score_breakdown` | trust.read           | Detailed score factor breakdown     |
-| `compare_agents`      | none                 | Rank up to 10 agents by trust score |
-
-### Interactions
-
-| Tool                      | Scope Required | Description                          |
-| ------------------------- | -------------- | ------------------------------------ |
-| `report_interaction`      | trust.report   | Submit an interaction report         |
-| `get_interaction_history` | trust.read     | Get interaction history for an agent |
-
-### Disputes
-
-| Tool              | Scope Required                         | Description                          |
-| ----------------- | -------------------------------------- | ------------------------------------ |
-| `file_dispute`    | trust.dispute.file                     | File a dispute about an interaction  |
-| `resolve_dispute` | trust.dispute.resolve + AgentAuth RBAC | Resolve a dispute (arbitrators only) |
-
-### Attestations
-
-| Tool                 | Scope Required     | Description                      |
-| -------------------- | ------------------ | -------------------------------- |
-| `issue_attestation`  | trust.attest.issue | Issue a signed trust attestation |
-| `verify_attestation` | none               | Verify an attestation JWT        |
-
-### Safety & Admin
-
-| Tool               | Scope Required | Description                                                                       |
-| ------------------ | -------------- | --------------------------------------------------------------------------------- |
-| `sybil_check`      | none           | Run sybil detection checks (ring/multi-hop reporting, burst registration across 1h/24h/7d windows, reporting velocity, delegation chain) |
-| `subscribe_alerts` | trust.admin    | Subscribe to score change notifications                                           |
-
-## MCP Resources
-
-| URI                                | Description                       |
-| ---------------------------------- | --------------------------------- |
-| `trust://agents/{id}/score`        | Current trust scores for an agent |
-| `trust://agents/{id}/history`      | Interaction history               |
-| `trust://agents/{id}/attestations` | Active attestations               |
-| `trust://leaderboard/{score_type}` | Top agents by score type          |
-| `trust://disputes/{id}`            | Dispute details                   |
-| `trust://health`                   | Server health and connectivity    |
-
-## MCP Prompts
-
-| Prompt                  | Description                                               |
-| ----------------------- | --------------------------------------------------------- |
-| `evaluate_counterparty` | Systematic PROCEED/CAUTION/DECLINE trust assessment       |
-| `explain_score_change`  | Diagnostic investigation of score changes                 |
-| `dispute_assessment`    | Structured arbitrator guide for evidence-based resolution |
-
-## Score Algorithm
-
-AgentTrust uses a **Bayesian Beta distribution** model:
-
-- **Prior**: α=2, β=2 → new agents start at 0.5 with low confidence
-- **Time decay**: `weight = 0.5 ^ (age_days / half_life_days)` (default half-life: 90 days)
-- **Reporter credibility**: `(0.5 + reporter_trust × 0.5) × trust_level_weight × sybil_multiplier × interaction_count_penalty`
-- **Trust level weights**: root=1.2×, delegated=1.0×, standalone=0.8×, ephemeral=0.7× — derived from `auth_source`/`agentauth_linked`, never from user-supplied metadata
-- **Sybil multiplier**: 0.3× (high risk), 0.6× (suspicious), 1.0× (clean) — via `SybilDetector`
-- **New-reporter gate**: `interaction_count_penalty = 0.3` for reporters with < 3 recorded interactions
-- **Mutual confirmation bonus**: `max(1.5 - 0.1 × (pair_count - 1), 1.0)` — diminishing returns per pair (1st: 1.5×, 6th+: 1.0×)
-- **Upheld dispute penalty**: `max(1.0 - n_upheld × 0.03, 0.50)` (floor: 0.50)
-- **Dismissed dispute penalty** (filer): exponential `max(1.0 - Σ(0.01 × 1.5ⁱ), 0.90)` — floor reached at ~5–6 dismissals
-- **Confidence**: `1.0 - 1.0 / (1.0 + n × 0.1)`
-
-**For a detailed walkthrough including role-aware scoring, Sybil detection, and worked examples, see [docs/interaction-scoring.md](docs/interaction-scoring.md).**
-
-## Environment Variables
-
-| Variable                 | Default                          | Description                                             |
-| ------------------------ | -------------------------------- | ------------------------------------------------------- |
-| `DATABASE_URL`           | —                                | PostgreSQL connection string (`postgres+asyncpg://...`) |
-| `REDIS_URL`              | `redis://localhost:6379/0`       | Redis connection string                                 |
-| `SIGNING_KEY_PATH`       | `keys/signing_key.pem`           | Path to Ed25519 private key                             |
-| `AUTH_PROVIDER`          | `both`                           | `agentauth` \| `standalone` \| `both`                   |
-| `AGENTAUTH_MCP_URL`      | `https://agentauth.radi.pro/mcp` | AgentAuth MCP endpoint                                  |
-| `AGENTAUTH_ACCESS_TOKEN` | —                                | Bearer token for AgentAuth MCP calls                    |
-| `SCORE_HALF_LIFE_DAYS`   | `90`                             | Score decay half-life in days                           |
-| `DISPUTE_PENALTY`        | `0.03`                           | Per-upheld-dispute score penalty                        |
-| `DISPUTE_FILER_DAILY_CAP`    | `10`   | Max new disputes a single agent may file within any 24-hour window              |
-| `DISPUTE_FILER_OPEN_CAP`     | `30`   | Max open disputes a single agent may hold simultaneously across all targets     |
-| `ATTESTATION_TTL_HOURS`  | `12`                             | Default attestation validity period                     |
-| `ATTESTATION_CUMULATIVE_REVOCATION_THRESHOLD` | `0.10` | Cumulative score drop from attestation issuance score that triggers revocation |
-| `MCP_TRANSPORT`          | `stdio`                          | `stdio` \| `streamable-http`                            |
-| `MCP_PORT`               | `8000`                           | Port for streamable-http transport                      |
-| `ENVIRONMENT`            | `development`                    | `development` \| `production` — binds to `0.0.0.0` in production (required when running behind a reverse proxy such as a Cloudflare tunnel) |
-| `LOG_LEVEL`              | `INFO`                           | Logging level                                           |
-| `JSON_LOGS`              | `false`                          | JSON log format (set `true` in production)              |
-| `METRICS_ENABLED`        | `true`                           | Expose `/metrics` Prometheus endpoint (streamable-http only) |
-| `SYBIL_BURST_24H_THRESHOLD`       | `20`  | Agents registered in the same ±12-hour window to trigger medium Sybil alert    |
-| `SYBIL_BURST_7D_THRESHOLD`        | `50`  | Agents registered in the same ±84-hour window to trigger slow Sybil alert      |
-| `SYBIL_REPORT_VELOCITY_THRESHOLD` | `50`  | Distinct negative reports by one agent in 24 hours to trigger velocity signal   |
-
-## Monitoring
-
-AgentTrust exposes a [Prometheus](https://prometheus.io/) `/metrics` endpoint when running with `streamable-http` transport. The docker-compose stack includes Prometheus and Grafana with a pre-provisioned dashboard.
-
-### Metrics
-
-| Metric | Type | Labels | Description |
-| ------ | ---- | ------ | ----------- |
-| `agent_trust_tool_calls_total` | Counter | `tool_name`, `status` | Total MCP tool invocations (status: `success` \| `error`) |
-| `agent_trust_tool_duration_seconds` | Histogram | `tool_name` | End-to-end tool call latency |
-| `agent_trust_tool_errors_total` | Counter | `tool_name`, `error_type` | Tool errors by exception class |
-
-### Access
-
-| URL | Service |
-| --- | ------- |
-| `http://localhost:3001` | Grafana (admin / `$GRAFANA_PASSWORD`) |
-| `http://localhost:9090` | Prometheus |
-| `http://localhost:8140/metrics` | Raw scrape endpoint |
-
-The Grafana dashboard (**AgentTrust — MCP Tool Usage**) is auto-provisioned and shows total calls, error rate, per-tool call rate, latency percentiles (p50/p95/p99), and an error breakdown table.
-
-Set `METRICS_ENABLED=false` to disable the `/metrics` endpoint.
-
-## Rate Limits
-
-Per-agent sliding window (60 seconds):
-
-| Trust Level     | Requests/min |
-| --------------- | ------------ |
-| `root`          | 300          |
-| `delegated`     | 120          |
-| `standalone`    | 60           |
-| `ephemeral`     | 30           |
-| Unauthenticated | 10           |
-
-## Testing
+Run the full stack with Docker Compose:
 
 ```bash
-# Run the full test suite
-uv run pytest
-
-# Quick summary (no verbose output)
-uv run pytest --tb=short -q
-
-# Run a specific test suite
-uv run pytest tests/test_engine/ -v        # score algorithm (Bayesian model, decay, penalties)
-uv run pytest tests/test_auth/ -v          # auth layer (AgentAuth, standalone Ed25519)
-uv run pytest tests/test_tools/ -v         # MCP tool unit tests (all 15 tools)
-uv run pytest tests/test_integration/ -v   # MCP protocol-level integration tests
-
-# MCP protocol integration tests only (68 tests, no DB/Redis required)
-uv run pytest tests/test_integration/test_mcp_protocol.py -v
-
-# Run a single test class or test
-uv run pytest tests/test_integration/test_mcp_protocol.py::TestRegisterAgentMCP -v
-uv run pytest tests/test_tools/test_agent_tools.py::test_register_agent_standalone -v
-
-# Show coverage
-uv run pytest --cov=agent_trust --cov-report=term-missing
-```
-
-The MCP protocol integration tests (`test_mcp_protocol.py`) use an in-process MCP client/server pair — no running database or Redis instance is required. All external dependencies are mocked per-test.
-
-## Development
-
-```bash
-# Install dependencies
-uv sync --extra dev
-
-# Lint and format
-uv run ruff check src/
-uv run ruff format src/
-
-# Create a new migration
-uv run alembic revision --autogenerate -m "description"
-
-# Seed test agents
-uv run python scripts/seed_test_agents.py
-```
-
-## CI/CD
-
-Two GitHub Actions workflows automate testing and deployment.
-
-### CI (`ci.yml`)
-
-Runs on every push and pull request:
-
-1. Starts PostgreSQL 16 (TimescaleDB) and Redis 7 as services
-2. Installs dependencies via `uv sync`
-3. Generates a signing keypair and runs Alembic migrations
-4. Lint: `ruff check src/`
-5. Format check: `ruff format --check src/`
-6. Tests: `pytest --tb=short -q`
-
-### CD (`deploy.yml`)
-
-Triggers automatically when CI passes on `main`. Connects via SSH to the Hetzner server and runs:
-
-```bash
-git pull origin main
-docker compose build
-docker compose run --rm agent-trust uv run alembic upgrade head
 docker compose up -d
 ```
 
-The server is exposed to the internet via a Cloudflare tunnel running on the Hetzner host — no CI changes needed for routing.
+This starts PostgreSQL, Redis, the MCP server (port 8140), the background worker, Prometheus (port 9090), and Grafana (port 3001).
 
-### Required GitHub Secrets
-
-| Secret | Description |
-| ---------------- | ------------------------------------------- |
-| `HETZNER_HOST` | Server IP or hostname |
-| `HETZNER_USER` | SSH username |
-| `HETZNER_SSH_KEY` | Private SSH key (PEM format) |
-| `HETZNER_APP_DIR` | Absolute app path on server (e.g. `/opt/agent-trust`) |
-
-## Deployment
-
-For manual or first-time deployment:
+### Tests
 
 ```bash
-# Full stack with docker compose (includes Prometheus + Grafana)
-docker compose up -d
-
-# Run migrations on first deploy
-docker compose run --rm agent-trust uv run alembic upgrade head
-
-# Generate signing keypair (first time only)
-docker compose exec agent-trust uv run python scripts/generate_keypair.py
+uv run pytest                          # all tests
+uv run pytest tests/test_tools/ -v     # MCP tools
+uv run pytest tests/test_engine/ -v    # score algorithm
+uv run pytest tests/test_auth/ -v      # authentication
+uv run pytest tests/test_integration/  # end-to-end
 ```
