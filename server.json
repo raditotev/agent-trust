@@ -1,0 +1,58 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.raditotev/agent-trust",
+  "title": "AgentTrust",
+  "description": "MCP Server for Agent Reputation & Trust Scoring",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/raditotev/agent-trust",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "agent-trust-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "DATABASE_URL",
+          "description": "PostgreSQL asyncpg connection string",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "REDIS_URL",
+          "description": "Redis connection string",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "SIGNING_KEY_PATH",
+          "description": "Path to Ed25519 private key PEM file",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "AUTH_PROVIDER",
+          "description": "Authentication provider: agentauth | standalone | both (default: both)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "AGENTAUTH_ACCESS_TOKEN",
+          "description": "Access token for AgentAuth MCP tool calls",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

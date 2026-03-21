@@ -2,6 +2,8 @@
 
 Reputation and trust scoring service for AI agents, exposed entirely as an [MCP](https://modelcontextprotocol.io/) server. Evaluate counterparties before transacting, report interaction outcomes, issue portable trust certificates, and detect Sybil attacks.
 
+<!-- mcp-name: io.github.raditotev/agent-trust -->
+
 ## Table of Contents
 
 - [Quickstart](#quickstart)

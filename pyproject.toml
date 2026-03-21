@@ -1,10 +1,23 @@
 [project]
-name = "agent-trust"
+name = "agent-trust-mcp"
 version = "0.1.0"
 description = "MCP Server for Agent Reputation & Trust Scoring"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.13"
+authors = [
+    { name = "Radi Totev" },
+]
+keywords = ["mcp", "ai-agents", "trust", "reputation", "scoring"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: Other/Proprietary License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
 dependencies = [
     "mcp[cli]>=1.0.0",
     "sqlalchemy[asyncio]>=2.0.0",
@@ -23,8 +36,13 @@ dependencies = [
     "prometheus-client>=0.20.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/raditotev/agent-trust"
+Repository = "https://github.com/raditotev/agent-trust"
+Issues = "https://github.com/raditotev/agent-trust/issues"
+
 [project.scripts]
-agent-trust = "agent_trust.server:main"
+agent-trust-mcp = "agent_trust.server:main"
 
 [project.optional-dependencies]
 dev = [
