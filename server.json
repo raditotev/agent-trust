@@ -3,7 +3,7 @@
   "name": "io.github.raditotev/agent-trust",
   "title": "AgentTrust",
   "description": "MCP Server for Agent Reputation & Trust Scoring",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": {
     "url": "https://github.com/raditotev/agent-trust",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "agent-trust-mcp",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "transport": {
         "type": "stdio"
       },

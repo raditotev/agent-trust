@@ -35,7 +35,7 @@ Add AgentTrust to your MCP client configuration:
 {
   "mcpServers": {
     "agent-trust": {
-      "url": "https://agenttrust.radi.pro/mcp"
+      "url": "https://agent-trust.radi.pro/mcp"
     }
   }
 }
@@ -123,7 +123,7 @@ AgentTrust supports two MCP transports:
 
 | Transport | Use case | Endpoint |
 |-----------|----------|----------|
-| **Streamable HTTP** | Remote agents, production | `https://agenttrust.radi.pro/mcp` |
+| **Streamable HTTP** | Remote agents, production | `https://agent-trust.radi.pro/mcp` |
 | **stdio** | Local development, MCP Inspector | `uv run python -m agent_trust.server` |
 
 ---
