@@ -1,0 +1,2514 @@
+{
+  "info": {
+    "name": "AgentTrust MCP Server",
+    "description": "Postman collection for testing the AgentTrust MCP server via Streamable HTTP transport (JSON-RPC 2.0).\n\n## Setup\n1. Start the server: `uv run python -m agent_trust.server --transport streamable-http --port 8000`\n2. Set collection variables: `base_url`, `access_token`, `agent_id`, `private_key_hex`\n3. Run **MCP / Initialize** first to establish a session\n\n## Auth Paths\n- **AgentAuth**: Set `access_token` to your AgentAuth bearer token\n- **Standalone JWT**: Use `generate_agent_token` to mint a token, then set `access_token`\n- **Auto-keygen**: Call `register_agent` with no credentials \u2014 server returns keypair\n\n## Protocol\nAll requests are POST to `{{base_url}}/mcp` with `Content-Type: application/json`.\nBody is a JSON-RPC 2.0 envelope: `{jsonrpc, id, method, params}`.\nTool calls use method `tools/call` with `{name, arguments}` in params.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://agent-trust.radi.pro",
+      "description": "MCP server base URL (change for remote/production)"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "description": "AgentAuth bearer token or standalone JWT (set after registering/authenticating)"
+    },
+    {
+      "key": "agent_id",
+      "value": "",
+      "description": "Your agent's UUID (set after register_agent)"
+    },
+    {
+      "key": "counterparty_id",
+      "value": "",
+      "description": "Another agent's UUID for interaction/dispute testing"
+    },
+    {
+      "key": "interaction_id",
+      "value": "",
+      "description": "Interaction UUID (set after report_interaction)"
+    },
+    {
+      "key": "dispute_id",
+      "value": "",
+      "description": "Dispute UUID (set after file_dispute)"
+    },
+    {
+      "key": "attestation_jwt",
+      "value": "",
+      "description": "Attestation JWT token (set after issue_attestation)"
+    },
+    {
+      "key": "public_key_hex",
+      "value": "",
+      "description": "Hex-encoded Ed25519 public key for standalone auth"
+    },
+    {
+      "key": "private_key_hex",
+      "value": "",
+      "description": "Hex-encoded Ed25519 private key (64 chars, keep secret)"
+    },
+    {
+      "key": "req_id",
+      "value": "1",
+      "description": "Auto-incremented JSON-RPC request ID (managed by pre-request script)"
+    },
+    {
+      "key": "mcp_session_id",
+      "value": "",
+      "description": "Session ID returned by initialize \u2014 injected into every request automatically"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Auto-increment JSON-RPC request ID",
+          "let id = parseInt(pm.collectionVariables.get('req_id') || '1');",
+          "pm.collectionVariables.set('req_id', String(id + 1));",
+          "pm.variables.set('current_req_id', String(id));"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "MCP Session",
+      "description": "MCP protocol session management \u2014 run Initialize first before any tool calls.",
+      "item": [
+        {
+          "name": "Initialize",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2024-11-05\",\n    \"capabilities\": {\n      \"roots\": { \"listChanged\": false },\n      \"sampling\": {}\n    },\n    \"clientInfo\": {\n      \"name\": \"Postman\",\n      \"version\": \"1.0.0\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Initialize successful', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.property('result');",
+                  "",
+                  "  // Log all response headers for debugging",
+                  "  const allHeaders = {};",
+                  "  pm.response.headers.each(h => allHeaders[h.key] = h.value);",
+                  "  console.log('Response headers:', JSON.stringify(allHeaders));",
+                  "",
+                  "  // mcp-session-id is lowercase per the MCP spec",
+                  "  const sessionId = pm.response.headers.get('mcp-session-id');",
+                  "  if (sessionId) {",
+                  "    pm.collectionVariables.set('mcp_session_id', sessionId);",
+                  "    console.log('Session ID captured:', sessionId);",
+                  "    console.log('Saved to Collection Variables > mcp_session_id');",
+                  "  } else {",
+                  "    console.warn('No mcp-session-id header in response. Check server logs.');",
+                  "  }",
+                  "  console.log('Server:', body.result.serverInfo?.name, body.result.serverInfo?.version);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Tools",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/list\",\n  \"params\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Tools listed', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  const tools = body.result?.tools || [];",
+                  "  console.log('Available tools (' + tools.length + '):', tools.map(t => t.name).join(', '));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Resources",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"resources/list\",\n  \"params\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "List Prompts",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"prompts/list\",\n  \"params\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Discovery",
+      "description": "Service discovery \u2014 call first to understand the API.",
+      "item": [
+        {
+          "name": "discover",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"discover\",\n    \"arguments\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery successful', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  console.log('Discovery result:', JSON.stringify(body.result, null, 2));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Agent Management",
+      "description": "Register, identify, and manage agent profiles.",
+      "item": [
+        {
+          "name": "register_agent \u2014 auto-keygen (no credentials)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"register_agent\",\n    \"arguments\": {\n      \"display_name\": \"My Test Agent\",\n      \"capabilities\": [\"data-analysis\", \"summarization\"],\n      \"metadata\": {\n        \"environment\": \"testing\",\n        \"version\": \"1.0.0\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Agent registered', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  // Parse the text content from MCP response",
+                  "  const content = body.result?.content;",
+                  "  if (content && content[0]?.text) {",
+                  "    try {",
+                  "      const data = JSON.parse(content[0].text);",
+                  "      if (data.agent_id) {",
+                  "        pm.collectionVariables.set('agent_id', data.agent_id);",
+                  "        console.log('agent_id set:', data.agent_id);",
+                  "      }",
+                  "      if (data.public_key_hex) {",
+                  "        pm.collectionVariables.set('public_key_hex', data.public_key_hex);",
+                  "        console.log('public_key_hex set:', data.public_key_hex);",
+                  "      }",
+                  "      if (data.private_key_hex) {",
+                  "        pm.collectionVariables.set('private_key_hex', data.private_key_hex);",
+                  "        console.log('SAVE private_key_hex (shown once):', data.private_key_hex);",
+                  "      }",
+                  "    } catch(e) { console.log('Raw response:', content[0].text); }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "register_agent \u2014 with AgentAuth token",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"register_agent\",\n    \"arguments\": {\n      \"display_name\": \"My AgentAuth Agent\",\n      \"capabilities\": [\"code-review\", \"testing\"],\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "register_agent \u2014 with existing public key",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"register_agent\",\n    \"arguments\": {\n      \"display_name\": \"Agent with Existing Key\",\n      \"public_key_hex\": \"{{public_key_hex}}\",\n      \"capabilities\": [\"task-execution\"]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "generate_agent_token",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"generate_agent_token\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"private_key_hex\": \"{{private_key_hex}}\",\n      \"ttl_minutes\": 60\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Token generated', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  const content = body.result?.content;",
+                  "  if (content && content[0]?.text) {",
+                  "    try {",
+                  "      const data = JSON.parse(content[0].text);",
+                  "      if (data.access_token) {",
+                  "        pm.collectionVariables.set('access_token', data.access_token);",
+                  "        console.log('access_token set, expires:', data.expires_at);",
+                  "      }",
+                  "    } catch(e) { console.log('Raw:', content[0].text); }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "whoami",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"whoami\",\n    \"arguments\": {\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Identity resolved', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  const content = body.result?.content;",
+                  "  if (content && content[0]?.text) {",
+                  "    try {",
+                  "      const data = JSON.parse(content[0].text);",
+                  "      console.log('Identity:', JSON.stringify(data, null, 2));",
+                  "    } catch(e) { console.log('Raw:', content[0].text); }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "get_agent_profile",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"get_agent_profile\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "get_agent_profile \u2014 unauthenticated (public summary)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"get_agent_profile\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "search_agents",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"search_agents\",\n    \"arguments\": {\n      \"min_score\": 0.5,\n      \"score_type\": \"overall\",\n      \"capabilities\": [],\n      \"min_interactions\": 0,\n      \"limit\": 20\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "link_agentauth",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"link_agentauth\",\n    \"arguments\": {\n      \"access_token\": \"{{access_token}}\",\n      \"public_key_hex\": \"{{public_key_hex}}\",\n      \"signed_proof\": \"<ed25519-signed-jwt-with-link-claims>\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Interactions",
+      "description": "Report, confirm, and query interactions between agents.",
+      "item": [
+        {
+          "name": "report_interaction \u2014 success",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"report_interaction\",\n    \"arguments\": {\n      \"counterparty_id\": \"{{counterparty_id}}\",\n      \"interaction_type\": \"transaction\",\n      \"outcome\": \"success\",\n      \"access_token\": \"{{access_token}}\",\n      \"context\": {\n        \"task_type\": \"data-processing\",\n        \"duration_ms\": 1200,\n        \"sla_met\": true\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Interaction reported', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  const content = body.result?.content;",
+                  "  if (content && content[0]?.text) {",
+                  "    try {",
+                  "      const data = JSON.parse(content[0].text);",
+                  "      if (data.interaction_id) {",
+                  "        pm.collectionVariables.set('interaction_id', data.interaction_id);",
+                  "        console.log('interaction_id set:', data.interaction_id);",
+                  "      }",
+                  "    } catch(e) { console.log('Raw:', content[0].text); }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "report_interaction \u2014 failure",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"report_interaction\",\n    \"arguments\": {\n      \"counterparty_id\": \"{{counterparty_id}}\",\n      \"interaction_type\": \"delegation\",\n      \"outcome\": \"failure\",\n      \"access_token\": \"{{access_token}}\",\n      \"context\": {\n        \"task_type\": \"file-transfer\",\n        \"duration_ms\": 30000,\n        \"sla_met\": false,\n        \"error\": \"timeout\"\n      },\n      \"evidence_hash\": \"\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "report_interaction \u2014 timeout",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"report_interaction\",\n    \"arguments\": {\n      \"counterparty_id\": \"{{counterparty_id}}\",\n      \"interaction_type\": \"query\",\n      \"outcome\": \"timeout\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "get_interaction_history",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"get_interaction_history\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"access_token\": \"{{access_token}}\",\n      \"since_days\": 90,\n      \"limit\": 50\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "get_interaction_history \u2014 filtered",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"get_interaction_history\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"access_token\": \"{{access_token}}\",\n      \"interaction_type\": \"transaction\",\n      \"outcome\": \"success\",\n      \"since_days\": 30,\n      \"limit\": 20\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "list_pending_confirmations",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"list_pending_confirmations\",\n    \"arguments\": {\n      \"access_token\": \"{{access_token}}\",\n      \"since_days\": 30,\n      \"limit\": 50\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "confirm_interaction",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"confirm_interaction\",\n    \"arguments\": {\n      \"interaction_id\": \"{{interaction_id}}\",\n      \"outcome\": \"success\",\n      \"access_token\": \"{{access_token}}\",\n      \"context\": {\n        \"note\": \"Confirmed from counterparty side\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scoring",
+      "description": "Trust score computation, comparison, and breakdown.",
+      "item": [
+        {
+          "name": "check_trust \u2014 overall (unauthenticated)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"check_trust\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "check_trust \u2014 reliability (authenticated)",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"check_trust\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"score_type\": \"reliability\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "check_trust \u2014 honesty",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"check_trust\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"score_type\": \"honesty\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "check_trust \u2014 domain score",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"check_trust\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"score_type\": \"domain:finance\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "check_trust_batch",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"check_trust_batch\",\n    \"arguments\": {\n      \"agent_ids\": [\n        \"{{agent_id}}\",\n        \"{{counterparty_id}}\"\n      ],\n      \"score_type\": \"overall\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "get_score_breakdown",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"get_score_breakdown\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "compare_agents",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"compare_agents\",\n    \"arguments\": {\n      \"agent_ids\": [\n        \"{{agent_id}}\",\n        \"{{counterparty_id}}\"\n      ],\n      \"score_type\": \"overall\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Disputes",
+      "description": "File and resolve disputes about interaction outcomes. Requires AgentAuth (trust.dispute.file / trust.dispute.resolve scopes).",
+      "item": [
+        {
+          "name": "file_dispute",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"file_dispute\",\n    \"arguments\": {\n      \"interaction_id\": \"{{interaction_id}}\",\n      \"reason\": \"The counterparty reported the outcome as success but the task was not completed as agreed. The deliverable was missing key components specified in the original request.\",\n      \"access_token\": \"{{access_token}}\",\n      \"evidence\": {\n        \"original_request\": \"...\",\n        \"actual_delivery\": \"...\",\n        \"missing_components\": [\"component_a\", \"component_b\"]\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Dispute filed', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  const content = body.result?.content;",
+                  "  if (content && content[0]?.text) {",
+                  "    try {",
+                  "      const data = JSON.parse(content[0].text);",
+                  "      if (data.dispute_id) {",
+                  "        pm.collectionVariables.set('dispute_id', data.dispute_id);",
+                  "        console.log('dispute_id set:', data.dispute_id);",
+                  "      }",
+                  "    } catch(e) { console.log('Raw:', content[0].text); }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "resolve_dispute \u2014 upheld",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"resolve_dispute\",\n    \"arguments\": {\n      \"dispute_id\": \"{{dispute_id}}\",\n      \"resolution\": \"upheld\",\n      \"access_token\": \"{{access_token}}\",\n      \"resolution_note\": \"Evidence supports the claimant. The counterparty failed to deliver the agreed components.\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "resolve_dispute \u2014 dismissed",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"resolve_dispute\",\n    \"arguments\": {\n      \"dispute_id\": \"{{dispute_id}}\",\n      \"resolution\": \"dismissed\",\n      \"access_token\": \"{{access_token}}\",\n      \"resolution_note\": \"Insufficient evidence provided. Dispute appears frivolous.\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "resolve_dispute \u2014 split",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"resolve_dispute\",\n    \"arguments\": {\n      \"dispute_id\": \"{{dispute_id}}\",\n      \"resolution\": \"split\",\n      \"access_token\": \"{{access_token}}\",\n      \"resolution_note\": \"Partial fault on both sides. Outcome recorded as partial.\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Attestations",
+      "description": "Issue and verify portable signed trust attestations (JWTs). Issuance requires trust.attest.issue scope.",
+      "item": [
+        {
+          "name": "issue_attestation",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"issue_attestation\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"access_token\": \"{{access_token}}\",\n      \"ttl_hours\": 24\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Attestation issued', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  const content = body.result?.content;",
+                  "  if (content && content[0]?.text) {",
+                  "    try {",
+                  "      const data = JSON.parse(content[0].text);",
+                  "      if (data.jwt_token) {",
+                  "        pm.collectionVariables.set('attestation_jwt', data.jwt_token);",
+                  "        console.log('attestation_jwt set, valid until:', data.valid_until);",
+                  "        console.log('scores:', JSON.stringify(data.score_snapshot));",
+                  "      }",
+                  "    } catch(e) { console.log('Raw:', content[0].text); }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "verify_attestation",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"verify_attestation\",\n    \"arguments\": {\n      \"jwt_token\": \"{{attestation_jwt}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Attestation verified', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  const content = body.result?.content;",
+                  "  if (content && content[0]?.text) {",
+                  "    try {",
+                  "      const data = JSON.parse(content[0].text);",
+                  "      console.log('valid:', data.valid, '| seconds_remaining:', data.seconds_remaining);",
+                  "      if (!data.valid) console.log('error:', data.error);",
+                  "    } catch(e) { console.log('Raw:', content[0].text); }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Sybil Detection",
+      "description": "Detect suspicious agent patterns indicating Sybil attacks. No authentication required.",
+      "item": [
+        {
+          "name": "sybil_check",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"sybil_check\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Sybil check complete', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  const content = body.result?.content;",
+                  "  if (content && content[0]?.text) {",
+                  "    try {",
+                  "      const data = JSON.parse(content[0].text);",
+                  "      console.log('risk_score:', data.risk_score, '| is_suspicious:', data.is_suspicious, '| signals:', data.signals?.length);",
+                  "    } catch(e) { console.log('Raw:', content[0].text); }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Resources",
+      "description": "Read MCP resources using the resources/read method.",
+      "item": [
+        {
+          "name": "Read: agent score",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"resources/read\",\n  \"params\": {\n    \"uri\": \"trust://agents/{{agent_id}}/score\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Read: agent interaction history",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"resources/read\",\n  \"params\": {\n    \"uri\": \"trust://agents/{{agent_id}}/history\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Read: agent attestations",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"resources/read\",\n  \"params\": {\n    \"uri\": \"trust://agents/{{agent_id}}/attestations\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Read: leaderboard \u2014 overall",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"resources/read\",\n  \"params\": {\n    \"uri\": \"trust://leaderboard/overall\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Read: leaderboard \u2014 reliability",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"resources/read\",\n  \"params\": {\n    \"uri\": \"trust://leaderboard/reliability\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Read: dispute details",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"resources/read\",\n  \"params\": {\n    \"uri\": \"trust://disputes/{{dispute_id}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "Read: health",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"resources/read\",\n  \"params\": {\n    \"uri\": \"trust://health\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Health check OK', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).not.to.have.property('error');",
+                  "  const content = body.result?.contents;",
+                  "  if (content && content[0]?.text) {",
+                  "    try {",
+                  "      const data = JSON.parse(content[0].text);",
+                  "      console.log('Health:', JSON.stringify(data, null, 2));",
+                  "    } catch(e) { console.log('Raw:', content[0].text); }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Prompts",
+      "description": "Get rendered prompts from the MCP server for LLM-assisted workflows.",
+      "item": [
+        {
+          "name": "evaluate_counterparty_prompt",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"prompts/get\",\n  \"params\": {\n    \"name\": \"evaluate_counterparty_prompt\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"transaction_value\": \"1000 USD\",\n      \"transaction_type\": \"data-processing contract\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "explain_score_change_prompt",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"prompts/get\",\n  \"params\": {\n    \"name\": \"explain_score_change_prompt\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        },
+        {
+          "name": "dispute_assessment_prompt",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{current_req_id}}\",\n  \"method\": \"prompts/get\",\n  \"params\": {\n    \"name\": \"dispute_assessment_prompt\",\n    \"arguments\": {\n      \"dispute_id\": \"{{dispute_id}}\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "E2E Flows",
+      "description": "Ordered sequences demonstrating full workflows. Run requests in order within each flow.",
+      "item": [
+        {
+          "name": "Flow 1: New Agent Onboarding",
+          "description": "1. register_agent (auto-keygen) \u2192 2. generate_agent_token \u2192 3. whoami \u2192 4. check_trust (self)",
+          "item": [
+            {
+              "name": "1. Register (auto-keygen)",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"flow1-1\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"register_agent\",\n    \"arguments\": {\n      \"display_name\": \"E2E Test Agent\",\n      \"capabilities\": [\"testing\"]\n    }\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/mcp",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "mcp"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Accept",
+                    "value": "application/json, text/event-stream"
+                  },
+                  {
+                    "key": "mcp-session-id",
+                    "value": "{{mcp_session_id}}"
+                  }
+                ]
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const body = pm.response.json();",
+                      "const content = body.result?.content;",
+                      "if (content && content[0]?.text) {",
+                      "  const data = JSON.parse(content[0].text);",
+                      "  pm.collectionVariables.set('agent_id', data.agent_id);",
+                      "  pm.collectionVariables.set('public_key_hex', data.public_key_hex);",
+                      "  pm.collectionVariables.set('private_key_hex', data.private_key_hex);",
+                      "  pm.environment.set('flow1_agent_id', data.agent_id);",
+                      "  console.log('[Flow1] agent_id:', data.agent_id);",
+                      "  console.log('[Flow1] SAVE private_key_hex:', data.private_key_hex);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "2. Generate token",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"flow1-2\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"generate_agent_token\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"private_key_hex\": \"{{private_key_hex}}\",\n      \"ttl_minutes\": 60\n    }\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/mcp",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "mcp"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Accept",
+                    "value": "application/json, text/event-stream"
+                  },
+                  {
+                    "key": "mcp-session-id",
+                    "value": "{{mcp_session_id}}"
+                  }
+                ]
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const body = pm.response.json();",
+                      "const content = body.result?.content;",
+                      "if (content && content[0]?.text) {",
+                      "  const data = JSON.parse(content[0].text);",
+                      "  pm.collectionVariables.set('access_token', data.access_token);",
+                      "  console.log('[Flow1] access_token set, expires:', data.expires_at);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "3. Whoami",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"flow1-3\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"whoami\",\n    \"arguments\": {\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/mcp",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "mcp"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Accept",
+                    "value": "application/json, text/event-stream"
+                  },
+                  {
+                    "key": "mcp-session-id",
+                    "value": "{{mcp_session_id}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "4. Check own trust score",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"flow1-4\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"check_trust\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/mcp",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "mcp"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Accept",
+                    "value": "application/json, text/event-stream"
+                  },
+                  {
+                    "key": "mcp-session-id",
+                    "value": "{{mcp_session_id}}"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Flow 2: Mutual Interaction Confirmation",
+          "description": "Two agents report + confirm an interaction, boosting mutual trust. Uses {{agent_id}} as reporter and {{counterparty_id}} as the counterparty.",
+          "item": [
+            {
+              "name": "1. Agent A reports success",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"flow2-1\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"report_interaction\",\n    \"arguments\": {\n      \"counterparty_id\": \"{{counterparty_id}}\",\n      \"interaction_type\": \"collaboration\",\n      \"outcome\": \"success\",\n      \"access_token\": \"{{access_token}}\",\n      \"context\": { \"task\": \"joint-data-analysis\", \"duration_ms\": 5000 }\n    }\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/mcp",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "mcp"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Accept",
+                    "value": "application/json, text/event-stream"
+                  },
+                  {
+                    "key": "mcp-session-id",
+                    "value": "{{mcp_session_id}}"
+                  }
+                ]
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const body = pm.response.json();",
+                      "const content = body.result?.content;",
+                      "if (content && content[0]?.text) {",
+                      "  const data = JSON.parse(content[0].text);",
+                      "  pm.collectionVariables.set('interaction_id', data.interaction_id);",
+                      "  console.log('[Flow2] interaction_id:', data.interaction_id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "2. Check pending confirmations (counterparty POV)",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"flow2-2\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"list_pending_confirmations\",\n    \"arguments\": {\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/mcp",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "mcp"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Accept",
+                    "value": "application/json, text/event-stream"
+                  },
+                  {
+                    "key": "mcp-session-id",
+                    "value": "{{mcp_session_id}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "3. Counterparty confirms",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"flow2-3\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"confirm_interaction\",\n    \"arguments\": {\n      \"interaction_id\": \"{{interaction_id}}\",\n      \"outcome\": \"success\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/mcp",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "mcp"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Accept",
+                    "value": "application/json, text/event-stream"
+                  },
+                  {
+                    "key": "mcp-session-id",
+                    "value": "{{mcp_session_id}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "4. Check score after mutual confirmation",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"flow2-4\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"check_trust\",\n    \"arguments\": {\n      \"agent_id\": \"{{agent_id}}\",\n      \"access_token\": \"{{access_token}}\"\n    }\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/mcp",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "mcp"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Accept",
+                    "value": "application/json, text/event-stream"
+                  },
+                  {
+                    "key": "mcp-session-id",
+                    "value": "{{mcp_session_id}}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
