@@ -60,6 +60,13 @@ mcp = FastMCP(
         "Use issue_attestation to get a portable trust certificate. "
         "Use file_dispute to contest incorrect interaction reports."
     ),
+    # Stateless HTTP: each request is handled independently without requiring a
+    # server-side session (Mcp-Session-Id). This is correct for AgentTrust because:
+    # - All authentication is per-request (JWT verification / token introspection)
+    # - Tool calls have no cross-request streaming state
+    # - Background and parallel subagents can't maintain session state across
+    #   invocations, causing "Session not found" errors with stateful sessions
+    stateless_http=True,
     # Disable DNS rebinding protection — the server runs behind a reverse proxy
     # (Cloudflare tunnel) which handles host validation at the edge. Enabling this
     # would reject requests where Host != localhost (e.g., host.docker.internal).

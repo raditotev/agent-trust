@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "AgentTrust MCP Server",
-    "description": "Postman collection for testing the AgentTrust MCP server via Streamable HTTP transport (JSON-RPC 2.0).\n\n## Setup\n1. Start the server: `uv run python -m agent_trust.server --transport streamable-http --port 8000`\n2. Set collection variables: `base_url`, `access_token`, `agent_id`, `private_key_hex`\n3. Run **MCP / Initialize** first to establish a session\n\n## Auth Paths\n- **AgentAuth**: Set `access_token` to your AgentAuth bearer token\n- **Standalone JWT**: Use `generate_agent_token` to mint a token, then set `access_token`\n- **Auto-keygen**: Call `register_agent` with no credentials \u2014 server returns keypair\n\n## Protocol\nAll requests are POST to `{{base_url}}/mcp` with `Content-Type: application/json`.\nBody is a JSON-RPC 2.0 envelope: `{jsonrpc, id, method, params}`.\nTool calls use method `tools/call` with `{name, arguments}` in params.",
+    "description": "Postman collection for testing the AgentTrust MCP server via Streamable HTTP transport (JSON-RPC 2.0).\n\n## Setup\n1. Start the server: `uv run python -m agent_trust.server --transport streamable-http --port 8000`\n2. Set collection variables: `base_url`, `access_token`, `agent_id`, `private_key_hex`\n3. Optionally run **MCP / Initialize** for protocol negotiation — the server is stateless and does not issue or require a session ID\n\n## Auth Paths\n- **AgentAuth**: Set `access_token` to your AgentAuth bearer token\n- **Standalone JWT**: Use `generate_agent_token` to mint a token, then set `access_token`\n- **Auto-keygen**: Call `register_agent` with no credentials \u2014 server returns keypair\n\n## Protocol\nAll requests are POST to `{{base_url}}/mcp` with `Content-Type: application/json`.\nBody is a JSON-RPC 2.0 envelope: `{jsonrpc, id, method, params}`.\nTool calls use method `tools/call` with `{name, arguments}` in params.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -58,7 +58,7 @@
     {
       "key": "mcp_session_id",
       "value": "",
-      "description": "Session ID returned by initialize \u2014 injected into every request automatically"
+      "description": "Not used — server runs in stateless mode and does not issue session IDs. Kept for reference only."
     }
   ],
   "event": [
@@ -133,14 +133,14 @@
                   "  pm.response.headers.each(h => allHeaders[h.key] = h.value);",
                   "  console.log('Response headers:', JSON.stringify(allHeaders));",
                   "",
-                  "  // mcp-session-id is lowercase per the MCP spec",
+                  "  // Server runs in stateless mode — no mcp-session-id is issued or required.",
+                  "  // If a session ID is present (e.g. connecting to a stateful server), it is captured.",
                   "  const sessionId = pm.response.headers.get('mcp-session-id');",
                   "  if (sessionId) {",
                   "    pm.collectionVariables.set('mcp_session_id', sessionId);",
                   "    console.log('Session ID captured:', sessionId);",
-                  "    console.log('Saved to Collection Variables > mcp_session_id');",
                   "  } else {",
-                  "    console.warn('No mcp-session-id header in response. Check server logs.');",
+                  "    console.log('No mcp-session-id header — server is stateless, this is expected.');",
                   "  }",
                   "  console.log('Server:', body.result.serverInfo?.name, body.result.serverInfo?.version);",
                   "});"
