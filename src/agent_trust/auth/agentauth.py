@@ -15,12 +15,14 @@ log = structlog.get_logger()
 
 # AgentTrust-level scopes granted to all authenticated AgentAuth agents.
 # These are AgentTrust's own scope namespace and are not managed by AgentAuth.
-AGENTAUTH_DEFAULT_SCOPES = frozenset([
-    "trust.read",
-    "trust.report",
-    "trust.attest.issue",
-    "trust.dispute.file",
-])
+AGENTAUTH_DEFAULT_SCOPES = frozenset(
+    [
+        "trust.read",
+        "trust.report",
+        "trust.attest.issue",
+        "trust.dispute.file",
+    ]
+)
 
 # Module-level persistent connection state
 _session_lock = asyncio.Lock()

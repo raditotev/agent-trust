@@ -56,9 +56,7 @@ async def resolve_identity(
 
             async with get_session() as session:
                 result = await session.execute(
-                    select(Agent).where(
-                        Agent.metadata_["agentauth_id"].astext == identity.agent_id
-                    )
+                    select(Agent).where(Agent.metadata_["agentauth_id"].astext == identity.agent_id)
                 )
                 linked = result.scalar_one_or_none()
                 if linked:
