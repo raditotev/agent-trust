@@ -255,13 +255,9 @@ async def test_check_trust_uses_cache():
 @pytest.mark.asyncio
 async def test_get_score_breakdown_requires_auth():
     """No valid token → error returned."""
-    mock_provider = MagicMock()
-    mock_provider.authenticate = AsyncMock(side_effect=AuthenticationError("invalid token"))
-    redis_mock = _make_redis_mock()
-
-    with (
-        patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
-        patch("agent_trust.tools.scoring.AgentAuthProvider", return_value=mock_provider),
+    with patch(
+        "agent_trust.tools.scoring.resolve_identity",
+        new=AsyncMock(side_effect=AuthenticationError("invalid token")),
     ):
         result = await get_score_breakdown(agent_id=_AGENT_A, access_token="bad-token")
 
@@ -272,13 +268,10 @@ async def test_get_score_breakdown_requires_auth():
 async def test_get_score_breakdown_requires_trust_read_scope():
     """Token valid but missing trust.read → error returned."""
     identity = _make_identity(_AGENT_A, scopes=["trust.report"])
-    mock_provider = MagicMock()
-    mock_provider.authenticate = AsyncMock(return_value=identity)
-    redis_mock = _make_redis_mock()
 
-    with (
-        patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
-        patch("agent_trust.tools.scoring.AgentAuthProvider", return_value=mock_provider),
+    with patch(
+        "agent_trust.tools.scoring.resolve_identity",
+        new=AsyncMock(return_value=identity),
     ):
         result = await get_score_breakdown(agent_id=_AGENT_A, access_token="tok")
 
@@ -291,8 +284,6 @@ async def test_get_score_breakdown_returns_all_types():
     """Authenticated with trust.read → all 4 score dimensions returned."""
     identity = _make_identity(_AGENT_A, scopes=["trust.read"])
     agent = _make_agent(_AGENT_A)
-    mock_provider = MagicMock()
-    mock_provider.authenticate = AsyncMock(return_value=identity)
 
     session = _make_session_for_agent(agent)
     redis_mock = _make_redis_mock()
@@ -311,7 +302,7 @@ async def test_get_score_breakdown_returns_all_types():
     with (
         patch("agent_trust.tools.scoring.get_session", side_effect=_session_factory(session)),
         patch("agent_trust.tools.scoring.get_redis", new=AsyncMock(return_value=redis_mock)),
-        patch("agent_trust.tools.scoring.AgentAuthProvider", return_value=mock_provider),
+        patch("agent_trust.tools.scoring.resolve_identity", new=AsyncMock(return_value=identity)),
         patch("agent_trust.tools.scoring.ScoreComputation", return_value=mock_engine),
         patch("agent_trust.tools.scoring.upsert_trust_score", new=AsyncMock()),
     ):

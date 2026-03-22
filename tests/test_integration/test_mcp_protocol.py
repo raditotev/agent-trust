@@ -1213,12 +1213,9 @@ class TestGetScoreBreakdownMCP:
     async def test_no_auth_returns_error(self, mcp_session):
         from agent_trust.auth.identity import AuthenticationError
 
-        with (
-            patch("agent_trust.db.redis.get_redis", new=AsyncMock(return_value=make_mock_redis())),
-            patch(
-                "agent_trust.tools.scoring.AgentAuthProvider.authenticate",
-                new=AsyncMock(side_effect=AuthenticationError("no token")),
-            ),
+        with patch(
+            "agent_trust.tools.scoring.resolve_identity",
+            new=AsyncMock(side_effect=AuthenticationError("no token")),
         ):
             r = await mcp_session.call_tool(
                 "get_score_breakdown",
@@ -1234,9 +1231,8 @@ class TestGetScoreBreakdownMCP:
         identity = make_identity()
         session_ctx = make_session_ctx(None)
         with (
-            patch("agent_trust.db.redis.get_redis", new=AsyncMock(return_value=make_mock_redis())),
             patch(
-                "agent_trust.tools.scoring.AgentAuthProvider.authenticate",
+                "agent_trust.tools.scoring.resolve_identity",
                 new=AsyncMock(return_value=identity),
             ),
             patch("agent_trust.tools.scoring.get_session", session_ctx),
@@ -1261,9 +1257,8 @@ class TestGetScoreBreakdownMCP:
             return _make_score_data(agent_id, score_type)
 
         with (
-            patch("agent_trust.db.redis.get_redis", new=AsyncMock(return_value=make_mock_redis())),
             patch(
-                "agent_trust.tools.scoring.AgentAuthProvider.authenticate",
+                "agent_trust.tools.scoring.resolve_identity",
                 new=AsyncMock(return_value=identity),
             ),
             patch("agent_trust.tools.scoring.get_session", session_ctx),
