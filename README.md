@@ -12,10 +12,21 @@ Reputation and trust scoring service for AI agents, exposed entirely as an [MCP]
 - [Tools Reference](#tools-reference)
   - [Discovery](#discovery)
   - [Agent Management](#agent-management)
+    - [`register_agent`](#register_agent)
+    - [`generate_agent_token`](#generate_agent_token)
+    - [`whoami`](#whoami)
+    - [`agent_status`](#agent_status)
+    - [`get_agent_profile`](#get_agent_profile)
+    - [`search_agents`](#search_agents)
+    - [`link_agentauth`](#link_agentauth)
+    - [`verify_link_proof`](#verify_link_proof)
   - [Trust Scoring](#trust-scoring)
   - [Interaction Reporting](#interaction-reporting)
   - [Disputes](#disputes)
   - [Attestations](#attestations)
+    - [`issue_attestation`](#issue_attestation)
+    - [`list_my_attestations`](#list_my_attestations)
+    - [`verify_attestation`](#verify_attestation)
   - [Sybil Detection](#sybil-detection)
 - [Resources](#resources)
 - [Prompts](#prompts)
@@ -270,13 +281,100 @@ search_agents(min_score=0.7, capabilities=["code-review"], limit=10)
 
 **Auth:** required (AgentAuth token)
 
-Link an existing standalone profile to an AgentAuth identity, merging interaction history.
+Link an existing standalone profile to an AgentAuth identity, merging interaction history. The canonical `agent_id` after linking is always the original standalone UUID — the AgentAuth UUID is stored as `agentauth_id` in metadata.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `access_token` | string | yes | AgentAuth bearer token |
 | `public_key_hex` | string | yes | Public key from standalone registration |
 | `signed_proof` | string | yes | JWT signed with private key (claims: `sub`, `action`, `iat`) |
+| `dry_run` | bool | no | Validate everything without committing changes (default `false`) |
+
+Response:
+
+```json
+{
+  "agent_id": "550e8400-...",
+  "canonical_agent_id": "550e8400-...",
+  "agentauth_id": "aa-uuid-...",
+  "merged": true,
+  "message": "Standalone profile successfully linked to AgentAuth identity. ..."
+}
+```
+
+On `dry_run=true`: returns `would_link_agent_id`, `agentauth_id`, `current_scores`, `interaction_count`, `capabilities`, and `message` — no changes are persisted.
+
+Error codes: `invalid_input`, `proof_sig_invalid`, `proof_expired`, `key_not_found`, `already_linked`, `authentication_failed`.
+
+#### `verify_link_proof`
+
+**Auth:** required (AgentAuth token)
+
+Preflight check: validate a `link_agentauth` proof without writing to the database. Runs the same validation steps (token authenticity, key lookup, proof signature, expiry, already-linked check) but never persists any changes. Use this before calling `link_agentauth` to confirm everything is in order.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `access_token` | string | yes | AgentAuth bearer token |
+| `public_key_hex` | string | yes | Hex-encoded Ed25519 public key of the standalone agent |
+| `signed_proof` | string | yes | JWT signed with the standalone private key |
+
+```
+verify_link_proof(
+  access_token="eyJ...",
+  public_key_hex="a1b2c3...",
+  signed_proof="eyJ..."
+)
+```
+
+Response:
+
+```json
+{
+  "valid": true,
+  "checks": {
+    "token_valid": true,
+    "key_found": true,
+    "proof_sig_valid": true,
+    "proof_not_expired": true,
+    "already_linked": false
+  },
+  "agent_id": "550e8400-..."
+}
+```
+
+#### `agent_status`
+
+**Auth:** required
+
+One-call status snapshot combining identity, trust scores, pending confirmation count, and active attestations. Useful as a dashboard or health check.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `access_token` | string | no | AgentAuth bearer token |
+| `public_key_hex` | string | no | Hex-encoded Ed25519 public key (standalone agents) |
+
+```
+agent_status(access_token="eyJ...")
+```
+
+Response:
+
+```json
+{
+  "agent_id": "550e8400-...",
+  "agentauth_linked": true,
+  "scores": {"overall": 0.73, "reliability": 0.81},
+  "scopes": ["trust.read", "trust.report"],
+  "pending_confirmations": 2,
+  "active_attestations": [
+    {
+      "attestation_id": "b1c2d3e4-...",
+      "valid_until": "2026-03-21T12:00:00+00:00",
+      "seconds_remaining": 86400
+    }
+  ]
+}
+```
 
 ---
 
@@ -548,6 +646,39 @@ Response:
   },
   "valid_from": "2026-03-20T12:00:00+00:00",
   "valid_until": "2026-03-21T12:00:00+00:00"
+}
+```
+
+#### `list_my_attestations`
+
+**Auth:** required
+
+List your active (non-expired, non-revoked) attestations. Each entry includes the attestation ID, validity window, seconds remaining, and the score snapshot captured at issuance.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `access_token` | string | no | AgentAuth bearer token |
+| `public_key_hex` | string | no | Hex-encoded Ed25519 public key (standalone agents) |
+
+```
+list_my_attestations(access_token="eyJ...")
+```
+
+Response:
+
+```json
+{
+  "agent_id": "550e8400-...",
+  "attestations": [
+    {
+      "attestation_id": "b1c2d3e4-...",
+      "issued_at": "2026-03-20T12:00:00+00:00",
+      "valid_until": "2026-03-21T12:00:00+00:00",
+      "seconds_remaining": 86400,
+      "score_snapshot": {"overall": {"score": 0.82, "confidence": 0.71}}
+    }
+  ],
+  "count": 1
 }
 ```
 
