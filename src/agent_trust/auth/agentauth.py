@@ -164,7 +164,7 @@ class AgentAuthProvider:
         if not agent_id:
             raise AuthenticationError("Token missing subject (agent_id)")
 
-        scopes_raw = introspection.get("scopes", introspection.get("scope", ""))
+        scopes_raw = introspection.get("scopes") or introspection.get("scope") or ""
         if isinstance(scopes_raw, str):
             scopes = scopes_raw.split() if scopes_raw else []
         else:
