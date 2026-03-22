@@ -6,9 +6,9 @@ import uuid
 import structlog
 from sqlalchemy import select
 
-from agent_trust.auth.agentauth import AgentAuthProvider
 from agent_trust.auth.identity import AuthenticationError
 from agent_trust.auth.provider import require_scope
+from agent_trust.auth.resolve import resolve_identity
 from agent_trust.config import settings
 from agent_trust.db.redis import get_redis
 from agent_trust.db.session import get_session
@@ -272,11 +272,8 @@ async def get_score_breakdown(
     REQUIRES authentication with trust.read scope.
     Use this to understand WHY an agent has a particular score.
     """
-    redis = await get_redis()
-    provider = AgentAuthProvider(redis_client=redis)
-
     try:
-        identity = await provider.authenticate(access_token=access_token)
+        identity = await resolve_identity(access_token=access_token)
         require_scope(identity, "trust.read")
     except (AuthenticationError, Exception) as e:
         return tool_error(
