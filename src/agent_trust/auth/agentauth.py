@@ -13,6 +13,15 @@ from agent_trust.config import settings
 
 log = structlog.get_logger()
 
+# AgentTrust-level scopes granted to all authenticated AgentAuth agents.
+# These are AgentTrust's own scope namespace and are not managed by AgentAuth.
+AGENTAUTH_DEFAULT_SCOPES = frozenset([
+    "trust.read",
+    "trust.report",
+    "trust.attest.issue",
+    "trust.dispute.file",
+])
+
 # Module-level persistent connection state
 _session_lock = asyncio.Lock()
 _persistent_session: ClientSession | None = None
@@ -170,10 +179,13 @@ class AgentAuthProvider:
         else:
             scopes = list(scopes_raw)
 
+        # Augment with AgentTrust default scopes (not managed by AgentAuth)
+        combined_scopes = list(set(scopes) | AGENTAUTH_DEFAULT_SCOPES)
+
         return AgentIdentity(
             agent_id=str(agent_id),
             source="agentauth",
-            scopes=scopes,
+            scopes=combined_scopes,
             trust_level=introspection.get("trust_level", "ephemeral"),
         )
 
