@@ -302,13 +302,16 @@ async def report_interaction(
                     negative_reports_24h=velocity_count,
                 )
 
-        # Check if counterparty already reported this interaction (for mutual confirmation)
+        # Check if counterparty already reported this interaction (for mutual confirmation).
+        # Only match unconfirmed reports — already-confirmed interactions from prior sessions
+        # must not be re-matched, which would skip the confirmation flow for new interactions.
         existing_result = await session.execute(
             select(Interaction).where(
                 Interaction.initiator_id == counterparty_uuid,
                 Interaction.counterparty_id == reporter_uuid,
                 Interaction.interaction_type == interaction_type,
                 Interaction.reported_by == counterparty_uuid,
+                Interaction.mutually_confirmed == False,  # noqa: E712
             )
         )
         counterparty_report = existing_result.scalar_one_or_none()
