@@ -6,6 +6,7 @@ import uuid
 import structlog
 from sqlalchemy import select
 
+from agent_trust.auth.agentauth import AgentAuthProvider
 from agent_trust.auth.identity import AuthenticationError
 from agent_trust.auth.provider import require_scope
 from agent_trust.auth.resolve import resolve_identity
