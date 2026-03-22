@@ -148,7 +148,7 @@ class AgentAuthProvider:
             return await self._call_agentauth_tool("introspect_token", {"token": access_token})
         except Exception as e:
             log.warning("agentauth_introspect_failed", error=str(e))
-            return {"active": False}
+            return {"active": False, "_unreachable": True}
 
     async def authenticate(
         self,
@@ -169,6 +169,10 @@ class AgentAuthProvider:
             introspection = await self._introspect_token_raw(access_token)
 
         if not introspection.get("active"):
+            if introspection.get("_unreachable"):
+                raise AuthenticationError(
+                    "AgentAuth service temporarily unreachable — retry shortly"
+                )
             raise AuthenticationError("Invalid or expired AgentAuth token")
 
         agent_id = introspection.get("sub") or introspection.get("agent_id")
