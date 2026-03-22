@@ -382,9 +382,12 @@ async def link_agentauth(
         standalone_agent.auth_source = "agentauth"
         standalone_agent.agentauth_linked = True
         standalone_agent.public_key = None  # key no longer usable for auth
-        # If the AgentAuth ID is different, record the canonical ID in metadata
+        # If the AgentAuth ID is different, record the canonical ID in metadata.
+        # Reassign the full dict so SQLAlchemy's change tracker detects the mutation
+        # (in-place JSONB mutations are not tracked). Also guards against metadata_ being None.
         if standalone_agent.agent_id != aa_uuid:
-            standalone_agent.metadata_["agentauth_id"] = str(aa_uuid)
+            current_metadata = standalone_agent.metadata_ or {}
+            standalone_agent.metadata_ = {**current_metadata, "agentauth_id": str(aa_uuid)}
 
         log.info(
             "agent_linked_to_agentauth",
