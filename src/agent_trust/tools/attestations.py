@@ -175,6 +175,84 @@ async def issue_attestation(
         }
 
 
+async def list_my_attestations(
+    access_token: str | None = None,
+    public_key_hex: str | None = None,
+) -> dict:
+    """List your active (non-expired, non-revoked) attestations.
+
+    Returns all attestations issued for your agent identity that are still
+    valid. Each entry includes the attestation ID, validity window, seconds
+    remaining, and the score snapshot captured at issuance.
+
+    REQUIRES authentication (access_token or public_key_hex).
+
+    Example call:
+        list_my_attestations(access_token="eyJ...")
+
+    Example response:
+        {
+            "agent_id": "550e8400-...",
+            "attestations": [
+                {
+                    "attestation_id": "b1c2d3e4-...",
+                    "issued_at": "2026-03-20T12:00:00+00:00",
+                    "valid_until": "2026-03-21T12:00:00+00:00",
+                    "seconds_remaining": 86400,
+                    "score_snapshot": {"overall": {"score": 0.82, "confidence": 0.71}}
+                }
+            ],
+            "count": 1
+        }
+    """
+    from agent_trust.auth.resolve import resolve_identity
+
+    try:
+        identity = await resolve_identity(access_token=access_token, public_key_hex=public_key_hex)
+    except Exception as e:
+        return tool_error(
+            "authentication_required",
+            str(e),
+            hint="Provide a valid access_token or public_key_hex.",
+        )
+
+    try:
+        agent_uuid = uuid.UUID(identity.agent_id)
+    except ValueError:
+        return tool_error("invalid_input", f"Invalid agent_id: {identity.agent_id}")
+
+    now = datetime.now(UTC)
+
+    async with get_session() as session:
+        result = await session.execute(
+            select(Attestation).where(
+                Attestation.subject_id == agent_uuid,
+                Attestation.revoked == False,  # noqa: E712
+                Attestation.valid_until > now,
+            )
+        )
+        records = result.scalars().all()
+
+    attestations = []
+    for rec in records:
+        seconds_remaining = max(0, int((rec.valid_until - now).total_seconds()))
+        attestations.append(
+            {
+                "attestation_id": str(rec.attestation_id),
+                "issued_at": rec.created_at.isoformat() if rec.created_at else None,
+                "valid_until": rec.valid_until.isoformat(),
+                "seconds_remaining": seconds_remaining,
+                "score_snapshot": rec.score_snapshot,
+            }
+        )
+
+    return {
+        "agent_id": identity.agent_id,
+        "attestations": attestations,
+        "count": len(attestations),
+    }
+
+
 async def verify_attestation(jwt_token: str) -> dict:
     """Verify an attestation's signature, check expiry, and confirm it hasn't been revoked.
 

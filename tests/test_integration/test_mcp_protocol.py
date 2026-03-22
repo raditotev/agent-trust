@@ -37,6 +37,7 @@ from tests.test_integration.conftest import (
 # ---------------------------------------------------------------------------
 
 EXPECTED_TOOLS = {
+    "agent_status",
     "check_trust",
     "check_trust_batch",
     "compare_agents",
@@ -49,6 +50,7 @@ EXPECTED_TOOLS = {
     "get_score_breakdown",
     "issue_attestation",
     "link_agentauth",
+    "list_my_attestations",
     "list_pending_confirmations",
     "register_agent",
     "report_interaction",
@@ -56,6 +58,7 @@ EXPECTED_TOOLS = {
     "search_agents",
     "sybil_check",
     "verify_attestation",
+    "verify_link_proof",
     "whoami",
 }
 
@@ -544,6 +547,7 @@ class TestLinkAgentauthMCP:
         standalone_agent.agent_id = uuid.uuid4()
         standalone_agent.public_key = bytes.fromhex(pub_hex)
         standalone_agent.agentauth_linked = False
+        standalone_agent.auth_source = "standalone"
 
         proof_payload = {"sub": pub_hex, "action": "link_agentauth", "iat": int(time.time())}
         signed_proof = pyjwt.encode(proof_payload, private_key, algorithm="EdDSA")

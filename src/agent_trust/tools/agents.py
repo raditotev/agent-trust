@@ -4,6 +4,7 @@ import binascii
 import json as _json
 import time
 import uuid
+from datetime import UTC, datetime
 
 import jwt as pyjwt
 import structlog
@@ -11,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from agent_trust.auth.agentauth import AgentAuthProvider
 from agent_trust.auth.identity import AgentIdentity, AuthenticationError
@@ -19,7 +20,15 @@ from agent_trust.auth.standalone import STANDALONE_SCOPES
 from agent_trust.config import settings
 from agent_trust.db.redis import get_redis
 from agent_trust.db.session import get_session
-from agent_trust.models import Agent, TrustScore
+from agent_trust.errors import (
+    ALREADY_LINKED,
+    INVALID_INPUT,
+    KEY_NOT_FOUND,
+    PROOF_EXPIRED,
+    PROOF_SIG_INVALID,
+    tool_error,
+)
+from agent_trust.models import Agent, Attestation, Interaction, TrustScore
 from agent_trust.ratelimit import check_rate_limit
 
 log = structlog.get_logger()
@@ -281,6 +290,7 @@ async def link_agentauth(
     access_token: str,
     public_key_hex: str,
     signed_proof: str,
+    dry_run: bool = False,
 ) -> dict:
     """Link a standalone trust profile to an AgentAuth identity.
 
@@ -292,6 +302,12 @@ async def link_agentauth(
 
     After linking, authenticate exclusively with your AgentAuth token — the
     public key will no longer be usable for authentication.
+
+    **Canonical agent ID contract**: after a successful link the canonical
+    ``agent_id`` is always the original standalone UUID. The AgentAuth UUID
+    is stored as ``agentauth_id`` in the profile's metadata and is also
+    returned in the response as ``agentauth_id``. All historical scores and
+    interactions remain attached to the canonical standalone UUID.
 
     The ``signed_proof`` JWT must be signed with the standalone agent's
     Ed25519 private key (algorithm ``EdDSA``) and contain the following
@@ -319,25 +335,39 @@ async def link_agentauth(
         signed_proof: JWT signed by the standalone agent's Ed25519 private key,
             proving ownership of the key. Must contain ``sub``, ``action``, and
             ``iat`` claims as described above.
+        dry_run: When ``True``, validate everything but do **not** commit any
+            changes. Returns a preview of what would happen including current
+            scores. Defaults to ``False``.
 
     Returns:
-        ``agent_id`` (the AgentAuth UUID now canonical), ``merged`` (bool),
-        and a ``message`` confirming success.
+        On success: ``agent_id`` (canonical standalone UUID), ``canonical_agent_id``
+        (same as ``agent_id``), ``agentauth_id`` (AgentAuth UUID stored in
+        metadata), ``merged`` (bool), and a confirmation ``message``.
 
-    Raises:
-        ``AuthenticationError`` if the token is invalid or the key is unknown.
+        On ``dry_run=True``: ``dry_run`` (``true``), ``would_link_agent_id``,
+        ``agentauth_id``, ``current_scores``, ``interaction_count``,
+        ``capabilities``, and ``message``.
+
+    Error codes:
+        - ``invalid_input``: malformed ``public_key_hex``.
+        - ``proof_sig_invalid``: JWT signature or content check failed.
+        - ``proof_expired``: JWT ``iat`` is outside the 300-second window.
+        - ``key_not_found``: no standalone agent registered with that public key.
+        - ``already_linked``: the standalone profile is already linked to AgentAuth.
+        - ``authentication_failed``: AgentAuth token invalid or expired.
     """
-    # --- Verify ownership proof ---
+    # --- Validate public key ---
     try:
         public_key_bytes = bytes.fromhex(public_key_hex)
     except (ValueError, binascii.Error) as e:
-        raise AuthenticationError(f"Invalid public_key_hex: {e}") from e
+        return tool_error(INVALID_INPUT, f"Invalid public_key_hex: {e}")
 
     try:
         public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
     except Exception as e:
-        return {"error": f"Invalid ownership proof: cannot decode public key — {e}"}
+        return tool_error(INVALID_INPUT, f"Cannot decode public key: {e}")
 
+    # --- Verify ownership proof JWT ---
     try:
         payload = pyjwt.decode(
             signed_proof,
@@ -346,65 +376,224 @@ async def link_agentauth(
             options={"require": ["sub", "action", "iat"]},
         )
     except pyjwt.InvalidTokenError as e:
-        return {"error": f"Invalid ownership proof: JWT verification failed — {e}"}
+        return tool_error(
+            PROOF_SIG_INVALID,
+            f"JWT signature verification failed: {e}",
+            hint="Re-sign a fresh proof JWT with your standalone private key.",
+        )
 
     if payload.get("sub") != public_key_hex:
-        return {"error": "Invalid ownership proof: 'sub' does not match public_key_hex"}
+        return tool_error(
+            PROOF_SIG_INVALID,
+            "Proof 'sub' does not match public_key_hex.",
+        )
 
     if payload.get("action") != "link_agentauth":
-        return {"error": "Invalid ownership proof: 'action' must be 'link_agentauth'"}
+        return tool_error(
+            PROOF_SIG_INVALID,
+            "Proof 'action' must be 'link_agentauth'.",
+        )
 
     iat = payload.get("iat")
     if not isinstance(iat, int | float) or abs(time.time() - iat) > 300:
-        return {
-            "error": "Invalid ownership proof: 'iat' is missing or expired "
-            "(must be within 300 seconds)",
-        }
+        return tool_error(
+            PROOF_EXPIRED,
+            "Proof 'iat' is missing or outside the 300-second window.",
+            hint="Generate a new signed_proof with a fresh iat timestamp.",
+        )
 
-    # Verify the AgentAuth token and get the identity
+    # --- Verify AgentAuth token ---
     redis = await get_redis()
     aa_provider = AgentAuthProvider(redis_client=redis)
     aa_identity = await aa_provider.authenticate(access_token=access_token)
     aa_uuid = uuid.UUID(aa_identity.agent_id)
 
-    # Look up the standalone agent by public key
+    # --- Look up standalone agent and apply (or preview) the link ---
     async with get_session() as session:
         result = await session.execute(select(Agent).where(Agent.public_key == public_key_bytes))
         standalone_agent = result.scalar_one_or_none()
 
         if not standalone_agent:
-            raise AuthenticationError(
-                "No standalone agent found with that public key. "
-                "Register first via register_agent with public_key_hex."
+            return tool_error(
+                KEY_NOT_FOUND,
+                "No standalone agent found with that public key.",
+                hint="Register first via register_agent with public_key_hex.",
             )
 
-        # Update the standalone profile to reflect AgentAuth linkage
+        if standalone_agent.agentauth_linked or standalone_agent.auth_source == "agentauth":
+            return tool_error(
+                ALREADY_LINKED,
+                "This standalone profile is already linked to an AgentAuth identity.",
+                hint="Use your AgentAuth token to authenticate. Re-linking is not supported.",
+            )
+
+        standalone_id = str(standalone_agent.agent_id)
+        standalone_uuid = standalone_agent.agent_id
+
+        if dry_run:
+            scores_result = await session.execute(
+                select(TrustScore).where(TrustScore.agent_id == standalone_uuid)
+            )
+            current_scores: dict[str, float] = {}
+            interaction_count = 0
+            for ts in scores_result.scalars().all():
+                current_scores[ts.score_type] = float(ts.score)
+                if ts.score_type == "overall":
+                    interaction_count = ts.interaction_count
+            return {
+                "dry_run": True,
+                "would_link_agent_id": standalone_id,
+                "agentauth_id": str(aa_uuid),
+                "current_scores": current_scores,
+                "interaction_count": interaction_count,
+                "capabilities": standalone_agent.capabilities or [],
+                "message": "dry_run: no changes made",
+            }
+
+        # Mutate the standalone profile to reflect AgentAuth linkage
         standalone_agent.auth_source = "agentauth"
         standalone_agent.agentauth_linked = True
         standalone_agent.public_key = None  # key no longer usable for auth
-        # If the AgentAuth ID is different, record the canonical ID in metadata.
         # Reassign the full dict so SQLAlchemy's change tracker detects the mutation
-        # (in-place JSONB mutations are not tracked). Also guards against metadata_ being None.
-        if standalone_agent.agent_id != aa_uuid:
+        # (in-place JSONB mutations are not tracked). Guards against metadata_ being None.
+        if standalone_uuid != aa_uuid:
             current_metadata = standalone_agent.metadata_ or {}
             standalone_agent.metadata_ = {**current_metadata, "agentauth_id": str(aa_uuid)}
 
         log.info(
             "agent_linked_to_agentauth",
-            standalone_id=str(standalone_agent.agent_id),
+            standalone_id=standalone_id,
             agentauth_id=str(aa_uuid),
         )
-        merged_id = str(standalone_agent.agent_id)
 
     return {
-        "agent_id": merged_id,
+        "agent_id": standalone_id,
+        "canonical_agent_id": standalone_id,
         "agentauth_id": str(aa_uuid),
         "merged": True,
         "message": (
             "Standalone profile successfully linked to AgentAuth identity. "
+            "canonical_agent_id is the original standalone UUID; "
+            "agentauth_id is the foreign AgentAuth reference stored in metadata. "
             "Use your AgentAuth token for all future calls."
         ),
     }
+
+
+async def verify_link_proof(
+    access_token: str,
+    public_key_hex: str,
+    signed_proof: str,
+) -> dict:
+    """Preflight check: validate a link_agentauth proof without writing to the DB.
+
+    Runs all the same validation steps as ``link_agentauth`` — token
+    authenticity, key lookup, proof signature, expiry, and whether the
+    agent is already linked — but never persists any changes.  Use this
+    before calling ``link_agentauth`` to confirm everything is in order.
+
+    Args:
+        access_token: AgentAuth bearer token to validate.
+        public_key_hex: Hex-encoded Ed25519 public key of the standalone agent.
+        signed_proof: JWT signed by the standalone private key (same format
+            required by ``link_agentauth``).
+
+    Returns:
+        A dict with:
+
+        - ``valid`` (bool): ``True`` only when all checks pass.
+        - ``checks``: individual check results:
+
+          - ``token_valid`` — AgentAuth token successfully authenticated.
+          - ``key_found`` — standalone agent exists with this public key.
+          - ``proof_sig_valid`` — JWT signature, ``sub``, and ``action`` OK.
+          - ``proof_not_expired`` — ``iat`` within 300 seconds of now.
+          - ``already_linked`` — the agent is already linked (blocks linking).
+
+        - ``agent_id``: standalone UUID if the key was found, else omitted.
+        - ``error``: description of the first failing check, if ``valid=False``.
+    """
+    checks: dict[str, bool] = {
+        "token_valid": False,
+        "key_found": False,
+        "proof_sig_valid": False,
+        "proof_not_expired": False,
+        "already_linked": False,
+    }
+    first_error: str | None = None
+
+    # --- Validate public key bytes ---
+    try:
+        public_key_bytes = bytes.fromhex(public_key_hex)
+        public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+    except Exception as e:
+        return {"valid": False, "checks": checks, "error": f"Invalid public_key_hex: {e}"}
+
+    # --- Verify proof JWT signature, sub, and action ---
+    proof_payload: dict | None = None
+    try:
+        proof_payload = pyjwt.decode(
+            signed_proof,
+            public_key,
+            algorithms=["EdDSA"],
+            options={"require": ["sub", "action", "iat"]},
+        )
+        if (
+            proof_payload.get("sub") == public_key_hex
+            and proof_payload.get("action") == "link_agentauth"
+        ):
+            checks["proof_sig_valid"] = True
+        else:
+            first_error = first_error or "Proof 'sub' or 'action' claim is incorrect."
+    except pyjwt.InvalidTokenError as e:
+        first_error = first_error or f"JWT signature verification failed: {e}"
+
+    # --- Check iat expiry (only if sig was valid) ---
+    if proof_payload is not None:
+        iat = proof_payload.get("iat")
+        if isinstance(iat, int | float) and abs(time.time() - iat) <= 300:
+            checks["proof_not_expired"] = True
+        else:
+            first_error = first_error or "Proof 'iat' is missing or outside the 300-second window."
+
+    # --- Verify AgentAuth token ---
+    try:
+        redis = await get_redis()
+        aa_provider = AgentAuthProvider(redis_client=redis)
+        await aa_provider.authenticate(access_token=access_token)
+        checks["token_valid"] = True
+    except Exception as e:
+        first_error = first_error or f"AgentAuth token invalid: {e}"
+
+    # --- Look up standalone agent ---
+    agent_id_str: str | None = None
+    async with get_session() as session:
+        result = await session.execute(select(Agent).where(Agent.public_key == public_key_bytes))
+        standalone_agent = result.scalar_one_or_none()
+
+        if standalone_agent:
+            checks["key_found"] = True
+            agent_id_str = str(standalone_agent.agent_id)
+            if standalone_agent.agentauth_linked or standalone_agent.auth_source == "agentauth":
+                checks["already_linked"] = True
+                first_error = first_error or "Agent is already linked to an AgentAuth identity."
+        else:
+            first_error = first_error or "No standalone agent found with that public key."
+
+    valid = (
+        checks["token_valid"]
+        and checks["key_found"]
+        and checks["proof_sig_valid"]
+        and checks["proof_not_expired"]
+        and not checks["already_linked"]
+    )
+
+    result_dict: dict = {"valid": valid, "checks": checks}
+    if agent_id_str:
+        result_dict["agent_id"] = agent_id_str
+    if not valid and first_error:
+        result_dict["error"] = first_error
+    return result_dict
 
 
 async def generate_agent_token(
@@ -489,13 +678,19 @@ async def whoami(
     and registration date. Useful for verifying your auth is working correctly
     before making other calls.
 
+    **Canonical agent ID contract**: for agents that have linked a standalone
+    profile to AgentAuth via ``link_agentauth``, the ``agent_id`` returned
+    here is always the original standalone UUID. The AgentAuth UUID is stored
+    as ``agentauth_id`` in the profile's ``metadata_`` field. Use the
+    standalone UUID (canonical ID) as the stable identifier in all API calls.
+
     Args:
         access_token: AgentAuth bearer token.
         public_key_hex: Hex-encoded Ed25519 public key (standalone agents).
 
     Returns:
-        ``agent_id``, ``source``, ``trust_level``, ``scopes``,
-        ``registered_at``, ``display_name``, ``capabilities``,
+        ``agent_id`` (canonical standalone UUID), ``source``, ``trust_level``,
+        ``scopes``, ``registered_at``, ``display_name``, ``capabilities``,
         ``agentauth_linked``, and ``scores`` (dict of score_type → score).
     """
     identity = await _resolve_identity(access_token, public_key_hex)
@@ -542,6 +737,96 @@ async def whoami(
         "agentauth_linked": agent.agentauth_linked,
         "scores": scores,
         "interaction_count": interaction_count,
+    }
+
+
+async def agent_status(
+    access_token: str | None = None,
+    public_key_hex: str | None = None,
+) -> dict:
+    """Return a comprehensive status snapshot for your agent.
+
+    Combines identity, trust scores, pending confirmation count, and active
+    attestations in a single call — useful as a dashboard or health check.
+
+    REQUIRES authentication (access_token or public_key_hex).
+
+    Example call:
+        agent_status(access_token="eyJ...")
+
+    Example response:
+        {
+            "agent_id": "550e8400-...",
+            "agentauth_linked": true,
+            "scores": {"overall": 0.73, "reliability": 0.81},
+            "scopes": ["trust.read", "trust.write"],
+            "pending_confirmations": 2,
+            "active_attestations": [
+                {
+                    "attestation_id": "b1c2d3e4-...",
+                    "valid_until": "2026-03-21T12:00:00+00:00",
+                    "seconds_remaining": 86400
+                }
+            ]
+        }
+    """
+    identity = await _resolve_identity(access_token, public_key_hex)
+    agent_uuid = uuid.UUID(identity.agent_id)
+    now = datetime.now(UTC)
+
+    async with get_session() as session:
+        agent_result = await session.execute(select(Agent).where(Agent.agent_id == agent_uuid))
+        agent = agent_result.scalar_one_or_none()
+
+        scores: dict[str, float] = {}
+        if agent:
+            scores_result = await session.execute(
+                select(TrustScore).where(TrustScore.agent_id == agent_uuid)
+            )
+            for ts in scores_result.scalars().all():
+                scores[ts.score_type] = float(ts.score)
+
+        # Count interactions that still need confirmation from us or our counterparty
+        pending_count_result = await session.execute(
+            select(Interaction).where(
+                or_(
+                    Interaction.initiator_id == agent_uuid,
+                    Interaction.counterparty_id == agent_uuid,
+                ),
+                Interaction.reported_by != agent_uuid,
+                Interaction.mutually_confirmed == False,  # noqa: E712
+            )
+        )
+        pending_confirmations = len(pending_count_result.scalars().all())
+
+        # Active (non-expired, non-revoked) attestations
+        attest_result = await session.execute(
+            select(Attestation).where(
+                Attestation.subject_id == agent_uuid,
+                Attestation.revoked == False,  # noqa: E712
+                Attestation.valid_until > now,
+            )
+        )
+        attestation_records = attest_result.scalars().all()
+
+    active_attestations = []
+    for rec in attestation_records:
+        seconds_remaining = max(0, int((rec.valid_until - now).total_seconds()))
+        active_attestations.append(
+            {
+                "attestation_id": str(rec.attestation_id),
+                "valid_until": rec.valid_until.isoformat(),
+                "seconds_remaining": seconds_remaining,
+            }
+        )
+
+    return {
+        "agent_id": identity.agent_id,
+        "agentauth_linked": agent.agentauth_linked if agent else (identity.source == "agentauth"),
+        "scores": scores,
+        "scopes": identity.scopes,
+        "pending_confirmations": pending_confirmations,
+        "active_attestations": active_attestations,
     }
 
 

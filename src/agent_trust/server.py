@@ -23,14 +23,20 @@ from agent_trust.resources.history import get_agent_history
 from agent_trust.resources.leaderboard import get_leaderboard
 from agent_trust.resources.scores import get_agent_score
 from agent_trust.tools.agents import (
+    agent_status,
     generate_agent_token,
     get_agent_profile,
     link_agentauth,
     register_agent,
     search_agents,
+    verify_link_proof,
     whoami,
 )
-from agent_trust.tools.attestations import issue_attestation, verify_attestation
+from agent_trust.tools.attestations import (
+    issue_attestation,
+    list_my_attestations,
+    verify_attestation,
+)
 from agent_trust.tools.discover import discover
 from agent_trust.tools.disputes import file_dispute, resolve_dispute
 from agent_trust.tools.interactions import (
@@ -76,8 +82,10 @@ mcp = FastMCP(
 # Agent tools
 mcp.tool()(track_tool_call(register_agent))
 mcp.tool()(track_tool_call(link_agentauth))
+mcp.tool()(track_tool_call(verify_link_proof))
 mcp.tool()(track_tool_call(generate_agent_token))
 mcp.tool()(track_tool_call(whoami))
+mcp.tool()(track_tool_call(agent_status))
 mcp.tool()(track_tool_call(get_agent_profile))
 mcp.tool()(track_tool_call(search_agents))
 
@@ -100,6 +108,7 @@ mcp.tool()(track_tool_call(compare_agents))
 # Attestation tools
 mcp.tool()(track_tool_call(issue_attestation))
 mcp.tool()(track_tool_call(verify_attestation))
+mcp.tool()(track_tool_call(list_my_attestations))
 
 # Sybil detection
 mcp.tool()(track_tool_call(sybil_check))

@@ -245,7 +245,7 @@ class TestLinkAgentauth:
 
     @pytest.mark.asyncio
     async def test_link_agentauth_unknown_key_raises(self):
-        """Unknown public key raises AuthenticationError."""
+        """Unknown public key returns key_not_found error."""
         import jwt as pyjwt
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -275,10 +275,10 @@ class TestLinkAgentauth:
             patch("agent_trust.tools.agents.get_redis", new=AsyncMock(return_value=AsyncMock())),
             patch("agent_trust.tools.agents.get_session", return_value=mock_ctx),
         ):
-            with pytest.raises(AuthenticationError, match="No standalone agent"):
-                await link_agentauth(
-                    access_token="tok", public_key_hex=public_key_hex, signed_proof=signed_proof
-                )
+            result = await link_agentauth(
+                access_token="tok", public_key_hex=public_key_hex, signed_proof=signed_proof
+            )
+        assert result.get("error_code") == "key_not_found"
 
 
 # ---------------------------------------------------------------------------

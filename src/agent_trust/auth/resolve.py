@@ -54,14 +54,35 @@ async def resolve_identity(
             from agent_trust.db.session import get_session
             from agent_trust.models import Agent
 
+            agentauth_sub = identity.agent_id
+            cache_key = f"agentauth_id_map:{agentauth_sub}"
+
+            # Check Redis cache before hitting the DB
+            try:
+                cached_id = await redis.get(cache_key)
+                if cached_id:
+                    return AgentIdentity(
+                        agent_id=cached_id,
+                        source="agentauth",
+                        scopes=identity.scopes,
+                        trust_level=identity.trust_level,
+                    )
+            except Exception:
+                pass  # Redis unavailable, fall through to DB
+
             async with get_session() as session:
                 result = await session.execute(
-                    select(Agent).where(Agent.metadata_["agentauth_id"].astext == identity.agent_id)
+                    select(Agent).where(Agent.metadata_["agentauth_id"].astext == agentauth_sub)
                 )
                 linked = result.scalar_one_or_none()
                 if linked:
+                    canonical_id = str(linked.agent_id)
+                    try:
+                        await redis.set(cache_key, canonical_id, ex=300)
+                    except Exception:
+                        pass  # Redis unavailable, skip caching
                     return AgentIdentity(
-                        agent_id=str(linked.agent_id),
+                        agent_id=canonical_id,
                         source="agentauth",
                         scopes=identity.scopes,
                         trust_level=identity.trust_level,
