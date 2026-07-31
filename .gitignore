@@ -14,7 +14,14 @@ keys/
 *.key
 *.pem
 
+# Both, explicitly: `.env` does not match `.env.prod`. `.env.prod` holds the
+# production secrets for the serving stack on this machine and must never be
+# committed.
 .env
+.env.prod
+
+# Database dumps taken during the Hetzner migration and by scripts/backup.sh
+backups/
 
 # Hypothesis artifacts
 .hypothesis/

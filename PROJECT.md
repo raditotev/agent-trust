@@ -37,15 +37,17 @@ uv run alembic revision --autogenerate -m "msg" # new migration
 
 ## CI/CD
 
-- Workflows: `.github/workflows/ci.yml` (lint + test) and `.github/workflows/deploy.yml` (SSH deploy)
+- Workflows: `.github/workflows/ci.yml` (lint + test) and `publish.yml` (PyPI + MCP Registry on `v*` tags)
 - CI runs on every push/PR — postgres 16 + redis 7 services, full pytest suite
-- CD fires on CI success on `main` — git pull → docker compose build → alembic upgrade head → docker compose up -d
-- Server exposed via Cloudflare tunnel on the Hetzner host (no workflow changes needed for routing)
-- Required secrets: `HETZNER_HOST`, `HETZNER_USER`, `HETZNER_SSH_KEY`, `HETZNER_APP_DIR`
+- **There is no CD.** Deploys are manual and local: `make deploy` (`scripts/deploy.sh`)
+- Serving host is the iMac, not a VPS — see `docs/deployment.md`
 
 ## Architecture Rules
 
 - This is an MCP-only server. NO REST API, NO HTTP endpoints beyond MCP transport.
+  The two exceptions are operational, not agent-facing: `/health` (for the deploy
+  script) and `/metrics` (for Prometheus). Do not add a third without an
+  equally operational reason.
 - All agent-facing functionality is exposed as MCP tools, resources, or prompts.
 - Tool docstrings are the API documentation — write them for LLM comprehension.
 - AgentAuth is the primary identity provider. Token introspection via its MCP server.

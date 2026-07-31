@@ -1,0 +1,144 @@
+# AgentTrust serving stack.
+#
+#   ./scripts/deploy.sh          build, migrate, restart, health-check
+#   make prod-logs / prod-ps     tail / inspect
+#
+# The app listens on 127.0.0.1:8140 and is published by the `agentauth-imac`
+# Cloudflare Tunnel, which terminates TLS and maps agent-trust.radi.pro straight
+# to that port. There is no reverse proxy in between.
+#
+# The `agent-trust-dev` compose project in docker-compose.yml owns host 5433/6380
+# and 8000; this stack publishes nothing but the app port.
+#
+# Observability is not configured here and must not be. Logs go to stdout as JSON,
+# where the shared stack (~/Projects/observability) picks them up off the Docker
+# socket; the app joins that stack's network so its /metrics endpoint can be
+# scraped by the shared Prometheus. There is no Grafana or Prometheus in this file.
+
+name: agent-trust
+
+services:
+  # ── Postgres + TimescaleDB ───────────────────────────────────────────────────
+  # Pinned, not `latest-pg16`: the interactions hypertable was dumped from
+  # timescaledb 2.25.2 / PG 16, and an image that silently moves ahead of the dump
+  # turns a restore into a debugging session.
+  postgres:
+    image: timescale/timescaledb:2.25.2-pg16
+    restart: always
+    env_file: .env.prod
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - agent-trust-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: &json-logs
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+    # Not exposed to the host — reach it with `docker compose exec postgres psql`
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: ['redis-server', '--appendonly', 'yes', '--requirepass', '${REDIS_PASSWORD}']
+    volumes:
+      - agent-trust-redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD}', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *json-logs
+    # Not exposed to the host
+
+  # ── App (MCP over streamable-http) ───────────────────────────────────────────
+  agent-trust:
+    build: .
+    image: agent-trust:latest
+    ports:
+      - '127.0.0.1:8140:8000' # loopback only — cloudflared terminates TLS
+    env_file: .env.prod
+    environment:
+      # These override whatever .env.prod carries over from the old host: compose
+      # `environment:` wins over `env_file:`, and the container talks to service
+      # names, not the published dev ports.
+      DATABASE_URL: 'postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}'
+      REDIS_URL: 'redis://:${REDIS_PASSWORD}@redis:6379/0'
+      ENVIRONMENT: production
+      AUTH_PROVIDER: both
+      MCP_TRANSPORT: streamable-http
+      MCP_PORT: '8000'
+      JSON_LOGS: 'true'
+      LOG_LEVEL: INFO
+      METRICS_ENABLED: 'true'
+      SIGNING_KEY_PATH: /app/keys/service.key
+    volumes:
+      # The Ed25519 attestation signing key. Copied from the old host, not
+      # generated here — a new key invalidates every attestation ever issued.
+      - ./keys:/app/keys
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'python', '-c', 'import urllib.request; urllib.request.urlopen("http://localhost:8000/health")']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *json-logs
+    networks:
+      - default
+      # Joined so the shared Prometheus can scrape http://agent-trust:8000/metrics.
+      - observability
+
+  # ── Worker (arq: score recompute, decay, attestation expiry, alerts) ─────────
+  # Reuses the image `agent-trust` builds. Do NOT add `build:` here: two services
+  # building the same context to the same tag race and fail with
+  # `AlreadyExists: image "agent-trust:latest"`. scripts/deploy.sh runs
+  # `compose build` before `up -d`, so the tag always exists — including on a cold
+  # machine. `make prod-up` alone assumes a prior build.
+  worker:
+    image: agent-trust:latest
+    command: ['uv', 'run', 'python', 'scripts/run_worker.py']
+    env_file: .env.prod
+    environment:
+      DATABASE_URL: 'postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}'
+      REDIS_URL: 'redis://:${REDIS_PASSWORD}@redis:6379/0'
+      ENVIRONMENT: production
+      JSON_LOGS: 'true'
+      LOG_LEVEL: INFO
+      SIGNING_KEY_PATH: /app/keys/service.key
+    volumes:
+      - ./keys:/app/keys
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+    logging: *json-logs
+
+# ── Named volumes (persistent across restarts and deployments) ────────────────
+volumes:
+  agent-trust-pgdata:
+  agent-trust-redisdata:
+
+networks:
+  default:
+  # Created once by hand (`docker network create observability`) and owned by
+  # ~/Projects/observability, so no single project can pull it out from under the
+  # others.
+  observability:
+    external: true

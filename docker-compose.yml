@@ -1,5 +1,15 @@
+# Local development stack. The serving stack is docker-compose.prod.yml.
+#
 # SECURITY: Set POSTGRES_PASSWORD and REDIS_PASSWORD before running.
 # Example: POSTGRES_PASSWORD=secure_random_password docker compose up -d
+#
+# The project name is explicit and distinct from the prod stack's `agent-trust`.
+# Without it both files derive the name from the directory, and each stack treats
+# the other's containers as orphans — `up` on one offers to remove the other's
+# database. Scripts that need to find a container should match on the
+# `com.docker.compose.project` label, never on the container name.
+name: agent-trust-dev
+
 services:
   postgres:
     image: timescale/timescaledb:latest-pg16
@@ -69,39 +79,10 @@ services:
       - ./keys:/app/keys
     restart: unless-stopped
 
-  prometheus:
-    image: prom/prometheus:v3.2.1
-    ports:
-      - '127.0.0.1:9090:9090'
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-    depends_on:
-      - agent-trust
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:11.5.2
-    ports:
-      - '3001:3000'
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: 'false'
-      GF_SERVER_ROOT_URL: https://logs-agent-trust.radi.pro
-      GF_SERVER_DOMAIN: logs-agent-trust.radi.pro
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-    depends_on:
-      - prometheus
-    restart: unless-stopped
-
+# Prometheus and Grafana used to live here. They are now the shared observability
+# stack's job (~/Projects/observability): one Grafana at logs.radi.pro, one
+# Prometheus, one Loki for every service on this machine. This project owns only
+# its dashboard, in monitoring/grafana/dashboards/, which that stack mounts.
 volumes:
   postgres_data:
   redis_data:
-  prometheus_data:
-  grafana_data:

@@ -1,5 +1,6 @@
 .PHONY: help install keygen migrate lint format format-check test test-engine test-auth test-tools test-integration \
-        server server-http dev ci docker-up docker-down docker-build
+        server server-http dev ci docker-up docker-down docker-build \
+        deploy prod-up prod-down prod-logs prod-ps
 
 # Default target
 help:
@@ -27,10 +28,17 @@ help:
 	@echo "  server-http    Run MCP server (streamable-http, port 8000)"
 	@echo "  dev            Open MCP Inspector"
 	@echo ""
-	@echo "Docker"
+	@echo "Docker (development stack)"
 	@echo "  docker-up      Start postgres + redis"
 	@echo "  docker-down    Stop all docker services"
 	@echo "  docker-build   Build docker images"
+	@echo ""
+	@echo "Production (this machine — see docs/deployment.md)"
+	@echo "  deploy         Build, migrate, restart, health-check"
+	@echo "  prod-up        Start the serving stack (assumes a prior build)"
+	@echo "  prod-down      Stop the serving stack (volumes are kept)"
+	@echo "  prod-logs      Tail the serving stack's logs"
+	@echo "  prod-ps        Show the serving stack's containers"
 	@echo ""
 	@echo "CI"
 	@echo "  ci             Run full CI pipeline (lint, format-check, migrate, test)"
@@ -85,7 +93,7 @@ server-http:
 dev:
 	uv run mcp dev src/agent_trust/server.py
 
-# ── Docker ────────────────────────────────────────────────────────────────────
+# ── Docker (development stack: docker-compose.yml, project agent-trust-dev) ───
 
 docker-up:
 	docker compose up -d postgres redis
@@ -95,6 +103,34 @@ docker-down:
 
 docker-build:
 	docker compose build
+
+# ── Production (serving stack: docker-compose.prod.yml, project agent-trust) ──
+#
+# --env-file and the compose file's `env_file:` are different mechanisms — the
+# flag feeds ${VAR} interpolation, the directive feeds the containers — so both
+# are needed and both point at .env.prod. Not .env: pydantic-settings and pytest
+# read that one, and production secrets there make the test suite run against
+# production.
+PROD_COMPOSE = docker compose --env-file .env.prod -f docker-compose.prod.yml
+
+# Colima's daemon defaults to the classic builder, which cannot parse the
+# Dockerfile's `RUN --mount=type=cache`. Needs `brew install docker-buildx`.
+export DOCKER_BUILDKIT = 1
+
+deploy:
+	./scripts/deploy.sh
+
+prod-up:
+	$(PROD_COMPOSE) up -d
+
+prod-down:
+	$(PROD_COMPOSE) down
+
+prod-logs:
+	$(PROD_COMPOSE) logs -f --tail=100
+
+prod-ps:
+	$(PROD_COMPOSE) ps
 
 # ── CI ────────────────────────────────────────────────────────────────────────
 

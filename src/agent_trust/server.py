@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 
 import sqlalchemy
 import structlog
@@ -9,7 +10,9 @@ import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from prometheus_client import make_asgi_app as make_prometheus_asgi_app
-from starlette.routing import Mount
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Mount, Route
 
 from agent_trust.config import settings
 from agent_trust.instrument import track_tool_call
@@ -211,6 +214,21 @@ async def lifespan_shutdown() -> None:
     log.info("agent_trust_shutdown")
 
 
+async def health_endpoint(_request: Request) -> Response:
+    """Plain-HTTP mirror of the ``trust://health`` resource, for deploy scripts.
+
+    Returns 503 when any dependency is down so a restart that comes up broken fails
+    the deploy loudly instead of silently serving errors.
+    """
+    payload = await get_health()
+    healthy = json.loads(payload)["overall"] == "healthy"
+    return Response(
+        payload,
+        status_code=200 if healthy else 503,
+        media_type="application/json",
+    )
+
+
 def main() -> None:
     """Entry point for the AgentTrust MCP server."""
     parser = argparse.ArgumentParser(description="AgentTrust MCP Server")
@@ -252,6 +270,9 @@ def main() -> None:
         if settings.metrics_enabled:
             starlette_app.router.routes.insert(0, Mount("/metrics", app=make_prometheus_asgi_app()))
             log.info("metrics_enabled", path="/metrics", port=args.port)
+
+        # Ahead of the MCP catch-all so the deploy script can poll it over plain HTTP.
+        starlette_app.router.routes.insert(0, Route("/health", health_endpoint))
 
         uvicorn_config = uvicorn.Config(
             starlette_app,

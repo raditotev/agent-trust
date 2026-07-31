@@ -259,39 +259,33 @@ Runs on every push and pull request:
 5. Format check: `ruff format --check src/`
 6. Tests: `pytest --tb=short -q`
 
-### CD (`deploy.yml`)
+### Publish (`publish.yml`)
 
-Triggers automatically when CI passes on `main`. Connects via SSH to the Hetzner server and runs:
+Fires on `v*` tags: builds the wheel, pushes to PyPI, and republishes `server.json`
+to the MCP Registry. Unrelated to the running service.
+
+### There is no CD
+
+There used to be a `deploy.yml` that SSH'd into a Hetzner VPS on every green build.
+The service now runs on the iMac and deploys are deliberately manual — one command,
+run by a person who is watching:
 
 ```bash
-git pull origin main
-docker compose build
-docker compose run --rm agent-trust uv run alembic upgrade head
-docker compose up -d
+make deploy          # or: ./scripts/deploy.sh
 ```
-
-The server is exposed to the internet via a Cloudflare tunnel running on the Hetzner host — no CI changes needed for routing.
-
-### Required GitHub Secrets
-
-| Secret | Description |
-| ---------------- | ------------------------------------------- |
-| `HETZNER_HOST` | Server IP or hostname |
-| `HETZNER_USER` | SSH username |
-| `HETZNER_SSH_KEY` | Private SSH key (PEM format) |
-| `HETZNER_APP_DIR` | Absolute app path on server (e.g. `/opt/agent-trust`) |
 
 ## Deployment
 
-For manual or first-time deployment:
+The full guide is **[docs/deployment.md](docs/deployment.md)** — read that before
+touching production. In brief:
 
-```bash
-# Full stack with docker compose (includes Prometheus + Grafana)
-docker compose up -d
-
-# Run migrations on first deploy
-docker compose run --rm agent-trust uv run alembic upgrade head
-
-# Generate signing keypair (first time only)
-docker compose exec agent-trust uv run python scripts/generate_keypair.py
-```
+- `docker-compose.prod.yml` (compose project `agent-trust`) is the serving stack;
+  `docker-compose.yml` (project `agent-trust-dev`) is for local development only.
+- The app listens on `127.0.0.1:8140`; a Cloudflare Tunnel maps
+  `agent-trust.radi.pro` straight to it. There is no reverse proxy.
+- Production secrets live in `.env.prod`, **not** `.env` — pytest and the dev
+  server read `.env`, and must not pick up production credentials.
+- `keys/service.key` signs every attestation. It is copied between machines,
+  never regenerated: a new key invalidates every attestation ever issued.
+- Prometheus and Grafana are not in this repo. The shared stack in
+  `~/Projects/observability` scrapes and dashboards every service on the machine.

@@ -827,7 +827,7 @@ Additional limits on specific operations:
 ### Prerequisites
 
 - Python 3.13+
-- PostgreSQL 16
+- PostgreSQL 16 **with the TimescaleDB extension** — `interactions` is a hypertable, so plain PostgreSQL is not enough
 - Redis 7
 - [uv](https://docs.astral.sh/uv/) package manager
 
@@ -899,13 +899,15 @@ uv run mcp dev src/agent_trust/server.py
 
 ### Docker
 
-Run the full stack with Docker Compose:
+Run the development stack with Docker Compose:
 
 ```bash
 docker compose up -d
 ```
 
-This starts PostgreSQL, Redis, the MCP server (port 8140), the background worker, Prometheus (port 9090), and Grafana (port 3001).
+This starts PostgreSQL (TimescaleDB, port 5433), Redis (port 6380), the MCP server, and the background worker.
+
+Metrics and dashboards are not part of this stack. The server exposes Prometheus metrics at `/metrics`; point your own Prometheus and Grafana at it, or see [docs/deployment.md](docs/deployment.md) for how the hosted instance uses a shared observability stack.
 
 ### Tests
 
