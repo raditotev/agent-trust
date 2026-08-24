@@ -119,6 +119,7 @@ services:
       ENVIRONMENT: production
       JSON_LOGS: 'true'
       LOG_LEVEL: INFO
+      METRICS_ENABLED: 'true'
       SIGNING_KEY_PATH: /app/keys/service.key
     volumes:
       - ./keys:/app/keys
@@ -129,6 +130,13 @@ services:
         condition: service_healthy
     restart: always
     logging: *json-logs
+    networks:
+      default:
+      # `worker` isn't a unique compose service name across projects (agent-
+      # marketplace also has one) — alias it explicitly so the shared
+      # Prometheus can resolve it unambiguously as agent-trust-worker:9100.
+      observability:
+        aliases: [agent-trust-worker]
 
 # ── Named volumes (persistent across restarts and deployments) ────────────────
 volumes:

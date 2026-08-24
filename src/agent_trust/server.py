@@ -15,7 +15,7 @@ from starlette.responses import Response
 from starlette.routing import Mount, Route
 
 from agent_trust.config import settings
-from agent_trust.instrument import track_tool_call
+from agent_trust.instrument import MetricsMiddleware, instrument_mcp_handlers, track_tool_call
 from agent_trust.logging_config import configure_logging
 from agent_trust.prompts.diagnose import dispute_assessment, explain_score_change
 from agent_trust.prompts.evaluate import evaluate_counterparty
@@ -180,6 +180,13 @@ async def health_resource() -> str:
     return await get_health()
 
 
+# Protocol-level MCP metrics (tools/list, resources/*, prompts/*, tools/call) —
+# see instrument.py. Every tool/resource/prompt above is already registered by
+# this point, though the wrapped handlers are generic dispatchers FastMCP sets
+# up once, not one per tool, so timing here isn't actually load-bearing.
+instrument_mcp_handlers(mcp)
+
+
 async def lifespan_startup() -> None:
     """Initialize all shared resources on startup."""
     from agent_trust.db.redis import get_redis
@@ -274,8 +281,12 @@ def main() -> None:
         # Ahead of the MCP catch-all so the deploy script can poll it over plain HTTP.
         starlette_app.router.routes.insert(0, Route("/health", health_endpoint))
 
+        # Wraps the fully-assembled app (routes above included) so /health and
+        # /metrics show up in HTTP_REQUESTS_TOTAL too, not just /mcp.
+        metrics_app = MetricsMiddleware(starlette_app)
+
         uvicorn_config = uvicorn.Config(
-            starlette_app,
+            metrics_app,
             host=host,
             port=args.port,
             # Trust proxy headers from Cloudflare tunnel and other reverse proxies.
